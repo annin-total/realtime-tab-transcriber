@@ -15,3 +15,12 @@ export const AUTH_COOKIE_NAME = "transcriber_auth";
 
 /** Cookie の max-age（秒）。7日間 */
 export const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
+
+/** パスコード認証 POST（相対パス） */
+export const API_PATH_AUTH = "/api/auth";
+
+/** 認証状態 GET（相対パス） */
+export const API_PATH_AUTH_ME = "/api/auth/me";
+
+/** ログアウト POST（相対パス） */
+export const API_PATH_LOGOUT = "/api/logout";
