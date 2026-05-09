@@ -20,6 +20,9 @@ import {
   requestTabAudioStream,
   stopMediaStream,
 } from "@/lib/display-media";
+import { connectRealtime } from "@/lib/realtime-client";
+import type { RealtimeConnection } from "@/lib/realtime-client";
+import { parseTranscriptEvent } from "@/lib/transcript-events";
 import type { AppStatus } from "@/lib/types";
 import { ActionButtons } from "./ActionButtons";
 import { StatusBadge } from "./StatusBadge";
@@ -37,10 +40,11 @@ function buildClipboardText(tentative: string, final: string): string {
 }
 
 /**
- * 文字起こし画面の状態と子コンポーネントを束ねる親（PR-07: タブ音声取得まで）
+ * 文字起こし画面の状態と子コンポーネントを束ねる親（PR-07〜10: 共有・WebRTC・transcript）
  */
 export function TranscriptionPanel() {
   const streamRef = useRef<MediaStream | null>(null);
+  const realtimeRef = useRef<RealtimeConnection | null>(null);
   /** 停止ボタン由来の解放か（トラック `ended` と二重通知を防ぐ） */
   const userInitiatedStopRef = useRef(false);
   const [status, setStatus] = useState<AppStatus>("idle");
@@ -64,8 +68,10 @@ export function TranscriptionPanel() {
     saveTranscriptCache(finalText);
   }, [finalText, cacheHydrated]);
 
-  /** 共有終了（トラック ended / 停止ボタン）でストリーム参照を外す */
+  /** Realtime とタブ共有ストリームをまとめて解放する */
   const releaseDisplayStream = useCallback(() => {
+    realtimeRef.current?.close();
+    realtimeRef.current = null;
     stopMediaStream(streamRef.current);
     streamRef.current = null;
     setHasDisplayStream(false);
@@ -84,11 +90,7 @@ export function TranscriptionPanel() {
         userInitiatedStopRef.current = false;
         return;
       }
-      stopMediaStream(stream);
-      if (streamRef.current === stream) {
-        streamRef.current = null;
-      }
-      setHasDisplayStream(false);
+      releaseDisplayStream();
       setStatus((prev) =>
         prev === "transcribing" || prev === "connecting"
           ? "stopped"
@@ -102,9 +104,27 @@ export function TranscriptionPanel() {
     return () => {
       tracks.forEach((t) => t.removeEventListener("ended", onEnded));
     };
-  }, [hasDisplayStream]);
+  }, [hasDisplayStream, releaseDisplayStream]);
 
   const hasTranscript = Boolean(tentativeText.trim() || finalText.trim());
+
+  /** DataChannel の Realtime イベントを暫定・確定テキストへ反映する */
+  const handleRealtimeEvent = useCallback((raw: unknown) => {
+    const event = parseTranscriptEvent(raw);
+    if (!event) return;
+
+    if (event.type === "delta") {
+      setTentativeText((prev) => prev + event.text);
+      return;
+    }
+
+    setFinalText((prev) => {
+      const next = `${prev}${prev ? "\n" : ""}${event.text}`;
+      saveTranscriptCache(next);
+      return next;
+    });
+    setTentativeText("");
+  }, []);
 
   const handleStart = useCallback(async () => {
     if (status !== "idle" && status !== "stopped" && status !== "error") {
@@ -121,7 +141,23 @@ export function TranscriptionPanel() {
       const stream = await requestTabAudioStream();
       streamRef.current = stream;
       setHasDisplayStream(true);
-      setStatus("transcribing");
+      setStatus("connecting");
+
+      await connectRealtime(
+        stream,
+        {
+          onEvent: handleRealtimeEvent,
+          onOpen: () => {
+            setStatus("transcribing");
+          },
+          onError: (err) => {
+            setErrorDetail(err.message);
+            setStatus("error");
+            releaseDisplayStream();
+          },
+        },
+        realtimeRef,
+      );
     } catch (e) {
       releaseDisplayStream();
       const domName = e instanceof DOMException ? e.name : "";
@@ -133,13 +169,13 @@ export function TranscriptionPanel() {
       const message =
         e instanceof Error
           ? e.message
-          : "画面共有の開始に失敗しました。";
+          : "画面共有または接続の開始に失敗しました。";
       setErrorDetail(message);
       setStatus("error");
     } finally {
       setStartBusy(false);
     }
-  }, [hasDisplayStream, releaseDisplayStream, startBusy, status]);
+  }, [handleRealtimeEvent, hasDisplayStream, releaseDisplayStream, startBusy, status]);
 
   const handleStop = useCallback(() => {
     userInitiatedStopRef.current = true;

@@ -1,6 +1,6 @@
 以下の方針で実装手順書を作成します。
 
-重要な更新点として、OpenAI Realtimeの接続は、MVPでは **一時トークン発行方式ではなく、WebRTC unified interface方式** を推奨します。ブラウザが作成したSDP offerをNext.js APIへ送り、Next.js側がOpenAIの `/v1/realtime/calls` に標準APIキーで中継し、SDP answerだけをブラウザへ返す構成です。OpenAI公式では、ブラウザ/モバイルで音声を直接扱う場合はWebRTCが推奨され、unified interfaceではブラウザのSDPを開発者サーバーがOpenAIへ中継する流れが説明されています。([OpenAI Developers][1])
+重要な更新点として、OpenAI Realtime のブラウザ接続は **ephemeral token 方式** とする。サーバーが `POST /v1/realtime/transcription_sessions` で短命クライアントシークレットを発行し、ブラウザが `Authorization: Bearer <ephemeral>` で `POST https://api.openai.com/v1/realtime/calls` に SDP offer を直接送る。標準 API キーはサーバーのみが保持する。([OpenAI Developers][1])
 
 ---
 
@@ -16,15 +16,15 @@ Vercel
 簡易パスコード認証
 HttpOnly Cookie
 getDisplayMedia()
-WebRTC unified interface
+WebRTC（transcription_sessions → /v1/realtime/calls）
 OpenAI Realtime transcription
-gpt-realtime-whisper
+gpt-4o-transcribe（精度優先・既定。環境変数で切替可）
 localStorage 24時間キャッシュ
 DBなし
 音声保存なし
 ```
 
-Realtime transcriptionは「音声からテキストだけを得る」用途向けで、`gpt-realtime-whisper` はライブ音声・transcript delta・低遅延用途に設計されています。OpenAI公式でも、リアルタイム文字起こしでは `type: "transcription"` のセッションを使い、ブラウザ音声ではWebRTC接続できると説明されています。([OpenAI Developers][2])
+Realtime transcription は「音声からテキストだけを得る」用途向けで、**MVP 既定モデルは `gpt-4o-transcribe`**（語誤りを抑えたいタブ音声向き）。`conversation.item.input_audio_transcription.delta` / `completed` 等のイベントで暫定・確定を受け取る。低遅延特化の `gpt-realtime-whisper` は環境変数 `OPENAI_REALTIME_TRANSCRIPTION_MODEL` で任意指定とし、GA 経路未対応の組織では拒否され得る。([OpenAI Developers][2])
 
 ---
 
@@ -44,17 +44,21 @@ MVPでは以下の流れにします。
 
 ```txt
 ブラウザ
-  ↓ createOffer()
-Next.js API /api/realtime/sdp
-  ↓ FormData(sdp, session)
-OpenAI /v1/realtime/calls
+  ↓ POST /api/realtime/session（Cookie 認証）
+Next.js API
+  ↓ POST /v1/realtime/transcription_sessions（標準 API キー）
+OpenAI
+  ↓ client_secret（短命トークン）を JSON で返す
+ブラウザ
+  ↓ createOffer() → POST https://api.openai.com/v1/realtime/calls（Bearer = client_secret）
+OpenAI
   ↓ SDP answer
 ブラウザ
   ↓ setRemoteDescription()
 WebRTC接続開始
 ```
 
-OpenAI公式のWebRTC unified interfaceでは、ブラウザがSDPを開発者サーバーへ送り、サーバーが標準APIキーでOpenAIへ送信し、返ってきたSDP answerをブラウザへ返す形が説明されています。([OpenAI Developers][1])
+公式の WebRTC 手順では、ephemeral キーをサーバーで発行し、ブラウザが `POST /v1/realtime/calls` に SDP を直接送る流れが説明されています。([OpenAI Developers][1])
 
 ## 1.3 transcriptイベント
 
@@ -85,7 +89,7 @@ PR-04: 認証ゲートUI
 PR-05: localStorage 24時間キャッシュ
 PR-06: 基本UIコンポーネント
 PR-07: Chromeタブ音声取得
-PR-08: OpenAI Realtime SDP API
+PR-08: OpenAI Realtime 一時セッション API
 PR-09: WebRTC接続クライアント
 PR-10: transcriptイベント反映
 PR-11: 停止・コピー・クリア・エラー整理
@@ -107,7 +111,7 @@ app/
     logout/
       route.ts
     realtime/
-      sdp/
+      session/
         route.ts
   globals.css
   layout.tsx
@@ -126,6 +130,7 @@ lib/
   constants.ts
   display-media.ts
   errors.ts
+  openai-realtime-session.ts
   realtime-client.ts
   transcript-events.ts
   types.ts
@@ -197,7 +202,7 @@ lib/errors.ts
 export const TRANSCRIPT_CACHE_KEY = "transcript-cache-v1";
 export const TRANSCRIPT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-export const REALTIME_MODEL = "gpt-realtime-whisper";
+export const REALTIME_MODEL = "gpt-4o-transcribe";
 export const TRANSCRIPTION_LANGUAGE = "ja";
 
 export const AUTH_COOKIE_NAME = "transcriber_auth";
@@ -226,8 +231,10 @@ export type TranscriptEvent =
 ```
 
 ```env
-# .env.example
+# .env.example（抜粋）
 OPENAI_API_KEY=
+# OPENAI_ORGANIZATION=org_…
+# OPENAI_REALTIME_TRANSCRIPTION_MODEL=gpt-realtime-whisper
 APP_PASSCODE=
 AUTH_SECRET=
 ```
@@ -536,116 +543,92 @@ export function stopMediaStream(stream: MediaStream | null): void {
 
 ---
 
-# 11. PR-08：OpenAI Realtime SDP API
+# 11. PR-08：OpenAI Realtime 一時セッション API
 
 ## 目的
 
-ブラウザから受け取ったSDP offerをOpenAIへ中継し、SDP answerを返す。
+認証済みクライアント向けに、`POST https://api.openai.com/v1/realtime/transcription_sessions` をサーバーから呼び出し、**短命の `client_secret`** を JSON で返す。リクエスト body は `lib/openai-realtime-session.ts` の `buildTranscriptionSessionBody()` に集約する。
 
 ## 追加ファイル
 
 ```txt
-app/api/realtime/sdp/route.ts
+app/api/realtime/session/route.ts
+lib/openai-realtime-session.ts
 ```
 
-## 採用するセッション設定
+## 採用する transcription_sessions の body（既定：`gpt-4o-transcribe`）
 
 ```json
 {
-  "type": "transcription",
-  "audio": {
-    "input": {
-      "transcription": {
-        "model": "gpt-realtime-whisper",
-        "language": "ja",
-        "delay": "low"
-      },
-      "turn_detection": {
-        "type": "server_vad",
-        "threshold": 0.5,
-        "prefix_padding_ms": 300,
-        "silence_duration_ms": 500
-      }
-    }
+  "input_audio_format": "pcm16",
+  "input_audio_transcription": {
+    "model": "gpt-4o-transcribe",
+    "language": "ja"
+  },
+  "turn_detection": {
+    "type": "server_vad",
+    "threshold": 0.5,
+    "prefix_padding_ms": 300,
+    "silence_duration_ms": 500
   }
 }
 ```
 
-`language` はISO-639-1形式の言語ヒントで、指定すると精度・遅延改善に役立つとされています。`delay` は `gpt-realtime-whisper` のGA Realtime sessionsで利用でき、値を上げると精度寄り、下げると低遅延寄りになります。([OpenAI Developers][6])
+`language` は ISO-639-1 の言語ヒント。`delay` は **`gpt-realtime-whisper` の GA Realtime セッションでのみ**意味があり、MVP 既定の `gpt-4o-transcribe` では送らない（実装でもモデルが whisper のときだけ付与する）。([OpenAI Developers][6])
 
-## コア処理例
+複数 Organization がある場合は、環境変数 `OPENAI_ORGANIZATION=org_…` を設定し、リクエストヘッダ `OpenAI-Organization` に渡す（表示名は不可）。
+
+## コア処理例（要点）
 
 ```ts
-// app/api/realtime/sdp/route.ts
+// app/api/realtime/session/route.ts（概念）
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME, verifyAuthValue } from "@/lib/auth";
-import { REALTIME_MODEL, TRANSCRIPTION_LANGUAGE } from "@/lib/constants";
+import { OPENAI_TRANSCRIPTION_SESSIONS_URL } from "@/lib/constants";
+import { buildTranscriptionSessionBody } from "@/lib/openai-realtime-session";
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request) {
+export async function POST() {
   const cookieStore = await cookies();
-  const authCookie = cookieStore.get(AUTH_COOKIE_NAME)?.value;
-
-  if (!verifyAuthValue(authCookie)) {
+  if (!verifyAuthValue(cookieStore.get(AUTH_COOKIE_NAME)?.value)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-
-  if (!process.env.OPENAI_API_KEY) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
     return NextResponse.json({ error: "OPENAI_API_KEY is not set" }, { status: 500 });
   }
 
-  const sdp = await request.text();
-
-  const sessionConfig = {
-    type: "transcription",
-    audio: {
-      input: {
-        transcription: {
-          model: REALTIME_MODEL,
-          language: TRANSCRIPTION_LANGUAGE,
-          delay: "low",
-        },
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500,
-        },
-      },
-    },
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
   };
+  const org = process.env.OPENAI_ORGANIZATION?.trim();
+  if (org) headers["OpenAI-Organization"] = org;
 
-  const form = new FormData();
-  form.set("sdp", sdp);
-  form.set("session", JSON.stringify(sessionConfig));
-
-  const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+  const upstream = await fetch(OPENAI_TRANSCRIPTION_SESSIONS_URL, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-    },
-    body: form,
+    headers,
+    body: buildTranscriptionSessionBody(),
   });
-
-  if (!response.ok) {
-    const message = await response.text();
-    return NextResponse.json({ error: message }, { status: response.status });
+  if (!upstream.ok) {
+    return NextResponse.json({ error: await upstream.text() }, { status: upstream.status });
   }
-
-  return new Response(await response.text(), {
-    headers: { "Content-Type": "application/sdp" },
+  const data = await upstream.json();
+  return NextResponse.json({
+    client_secret: data.client_secret.value,
+    expires_at: data.client_secret.expires_at,
   });
 }
 ```
 
 ## 受け入れ条件
 
-* 未認証なら401。
-* APIキー未設定なら500。
-* SDP offerをPOSTするとSDP answerが返る。
-* ブラウザにOpenAI APIキーが露出しない。
+* 未認証なら 401。
+* `OPENAI_API_KEY` 未設定なら 500。
+* 成功時、JSON に `client_secret`（短命トークン）が含まれる。
+* **標準 API キーはレスポンスに含めない**（ブラウザへ渡すのは ephemeral のみ）。
 
 ---
 
@@ -653,7 +636,7 @@ export async function POST(request: Request) {
 
 ## 目的
 
-取得したChromeタブ音声トラックをWebRTCでOpenAI Realtimeへ送る。
+`POST /api/realtime/session` で ephemeral を取得し、ブラウザから **`POST https://api.openai.com/v1/realtime/calls`** に SDP offer を送って SDP answer を受け取り、`RTCPeerConnection` を確立する。
 
 ## 追加ファイル
 
@@ -661,83 +644,35 @@ export async function POST(request: Request) {
 lib/realtime-client.ts
 ```
 
-## コア処理例
+## コア処理例（要点）
 
 ```ts
-// lib/realtime-client.ts
-type RealtimeHandlers = {
-  onEvent: (event: unknown) => void;
-  onOpen?: () => void;
-  onError?: (error: Error) => void;
-};
+// lib/realtime-client.ts（概念）
+const sessionRes = await fetch("/api/realtime/session", { method: "POST", credentials: "same-origin" });
+const { client_secret } = await sessionRes.json();
 
-export type RealtimeConnection = {
-  peer: RTCPeerConnection;
-  dataChannel: RTCDataChannel;
-  close: () => void;
-};
+const offer = await peer.createOffer();
+await peer.setLocalDescription(offer);
 
-export async function connectRealtime(
-  stream: MediaStream,
-  handlers: RealtimeHandlers
-): Promise<RealtimeConnection> {
-  const peer = new RTCPeerConnection();
-  const audioTrack = stream.getAudioTracks()[0];
-
-  if (!audioTrack) {
-    throw new Error("音声トラックがありません");
-  }
-
-  peer.addTrack(audioTrack, stream);
-
-  const dataChannel = peer.createDataChannel("oai-events");
-
-  dataChannel.onopen = () => handlers.onOpen?.();
-  dataChannel.onerror = () => handlers.onError?.(new Error("DataChannel error"));
-  dataChannel.onmessage = (message) => {
-    try {
-      handlers.onEvent(JSON.parse(message.data));
-    } catch {
-      handlers.onError?.(new Error("Realtimeイベントの解析に失敗しました"));
-    }
-  };
-
-  const offer = await peer.createOffer();
-  await peer.setLocalDescription(offer);
-
-  const response = await fetch("/api/realtime/sdp", {
-    method: "POST",
-    body: offer.sdp,
-    headers: { "Content-Type": "application/sdp" },
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-
-  const answer: RTCSessionDescriptionInit = {
-    type: "answer",
-    sdp: await response.text(),
-  };
-
-  await peer.setRemoteDescription(answer);
-
-  return {
-    peer,
-    dataChannel,
-    close: () => {
-      dataChannel.close();
-      peer.close();
-    },
-  };
-}
+const sdpRes = await fetch("https://api.openai.com/v1/realtime/calls", {
+  method: "POST",
+  body: offer.sdp ?? "",
+  headers: {
+    Authorization: `Bearer ${client_secret}`,
+    "Content-Type": "application/sdp",
+  },
+});
+await peer.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
 ```
+
+`DataChannel` 名は `oai-events`。接続確立後は従来どおり `conversation.item.input_audio_transcription.*` を処理する。
 
 ## 受け入れ条件
 
-* `MediaStream` を渡すとWebRTC接続できる。
-* DataChannel経由でRealtimeイベントを受信できる。
-* `close()` で接続が閉じる。
+* `MediaStream` を渡すと WebRTC 接続できる。
+* DataChannel 経由で Realtime イベントを受信できる。
+* `close()` で PeerConnection / DataChannel を閉じられる。
+* **`OPENAI_API_KEY` はブラウザに渡さない**（calls には ephemeral のみ）。
 
 ---
 
@@ -886,6 +821,8 @@ VercelのProject Settingsで以下を設定します。
 OPENAI_API_KEY=sk-...
 APP_PASSCODE=任意のパスコード
 AUTH_SECRET=十分長いランダム文字列
+OPENAI_ORGANIZATION=org_…（複数 org 時のみ）
+OPENAI_REALTIME_TRANSCRIPTION_MODEL=gpt-realtime-whisper（既定を変える場合のみ）
 ```
 
 Vercelの環境変数変更は既存デプロイには反映されず、反映には再デプロイが必要です。([Vercel][7])
@@ -946,17 +883,10 @@ Chromeタブを選択し、「音声を共有」をONにしてください。
 
 今回のMVPでは、保存するのは文字起こしテキストだけです。音声トラックはWebRTCでOpenAIへ送信されますが、自前DB・Storage・ファイルには保存しません。
 
-## 16.4 `gpt-realtime-whisper` の遅延設定
+## 16.4 文字起こしモデルと `delay`
 
-MVPでは `delay: "low"` 推奨です。
-
-```txt
-minimal: 低遅延寄り
-low: MVPの初期値として無難
-medium/high/xhigh: 精度寄り
-```
-
-公式にも、delayを低くすると早い部分結果、高くすると品質改善が期待できると説明されています。([OpenAI Developers][6])
+* **MVP 既定は `gpt-4o-transcribe`**。語誤りを抑えたいタブ音声向き。`transcription_sessions` の body では **`delay` は付けない**（whisper 専用パラメータのため）。
+* **`gpt-realtime-whisper` に切り替える場合のみ**（環境変数 `OPENAI_REALTIME_TRANSCRIPTION_MODEL`）、GA Realtime 経路で `delay`（`minimal` / `low` / …）が意味を持つ。公式の遅延チューニングは Realtime transcription ガイドを参照。([OpenAI Developers][2])
 
 ---
 
@@ -971,7 +901,7 @@ medium/high/xhigh: 精度寄り
 | PR-05 | キャッシュ          | localStorage 24時間保存/復元/削除          |
 | PR-06 | UI骨格           | ボタン、状態、表示欄                         |
 | PR-07 | 音声取得           | getDisplayMedia、音声トラック検証           |
-| PR-08 | OpenAI SDP API | `/api/realtime/sdp`、OpenAI中継       |
+| PR-08 | Realtime 一時セッション | `/api/realtime/session`、`transcription_sessions` |
 | PR-09 | WebRTC接続       | RTCPeerConnection、DataChannel      |
 | PR-10 | transcript反映   | delta/completedイベントをUIへ反映          |
 | PR-11 | UX仕上げ          | 停止、コピー、クリア、エラー                     |
