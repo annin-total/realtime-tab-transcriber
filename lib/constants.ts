@@ -24,3 +24,10 @@ export const API_PATH_AUTH_ME = "/api/auth/me";
 
 /** ログアウト POST（相対パス） */
 export const API_PATH_LOGOUT = "/api/logout";
+
+/** Realtime WebRTC 用 SDP 中継 POST（相対パス・認証必須） */
+export const API_PATH_REALTIME_SDP = "/api/realtime/sdp";
+
+/** OpenAI Realtime unified interface（サーバーからのみ呼び出す） */
+export const OPENAI_REALTIME_CALLS_URL =
+  "https://api.openai.com/v1/realtime/calls";
