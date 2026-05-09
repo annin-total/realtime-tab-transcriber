@@ -30,7 +30,7 @@ export function buildRealtimeClientSecretBody(): string {
     transcription,
   };
 
-  /* GA: gpt-realtime-whisper の transcription では turn_detection は null（公式制約） */
+  /* gpt-realtime-whisper の transcription では turn_detection は null（API 制約） */
   if (model === "gpt-realtime-whisper") {
     input.turn_detection = null;
   } else {

@@ -6,8 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "verify:openai": "bash scripts/verify-openai-realtime.sh"
+    "lint": "eslint"
   },
   "dependencies": {
     "next": "16.2.6",

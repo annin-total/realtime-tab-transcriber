@@ -4,7 +4,7 @@ export const TRANSCRIPT_CACHE_KEY = "transcript-cache-v1";
 /** キャッシュの有効期限（24時間） */
 export const TRANSCRIPT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** OpenAI Realtime transcription_sessions 既定モデル（精度優先。`OPENAI_REALTIME_TRANSCRIPTION_MODEL` で上書き可） */
+/** Realtime transcription 既定モデル（`OPENAI_REALTIME_TRANSCRIPTION_MODEL` で上書き可） */
 export const REALTIME_MODEL = "gpt-4o-transcribe";
 
 /** 既定の文字起こし言語（BCP 47） */

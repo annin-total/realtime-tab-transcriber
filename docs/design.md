@@ -21,7 +21,7 @@ Chromeタブ音声
 
 `getDisplayMedia()` は、ユーザーに画面・ウィンドウ・タブの共有対象を選ばせ、許可された内容を `MediaStream` として取得できるWeb APIです。HTTPSなどの安全なコンテキストで利用され、ユーザー操作と毎回の許可が必要です。今回の「開始ボタン → Chromeタブ共有 → 音声共有ON → 文字起こし開始」というUXと合います。([MDNウェブドキュメント][1])
 
-OpenAI Realtime API は、ブラウザ・モバイルのリアルタイム音声用途では WebRTC が推奨されています。MVPでは文字起こし**精度**を優先し、`POST /v1/realtime/transcription_sessions` で発行した短命トークンを用いてブラウザから `POST /v1/realtime/calls` に SDP を直接送る方式とし、モデルは **`gpt-4o-transcribe`** を既定とする（暫定・確定の transcript イベントは Realtime transcription と同様に受け取れる）。([OpenAI Developers][2])
+OpenAI Realtime API は、ブラウザ・モバイルのリアルタイム音声用途では WebRTC が推奨されています。MVPでは文字起こし**精度**を優先し、サーバーが `POST /v1/realtime/client_secrets` で発行した短命トークンを用いてブラウザから `POST /v1/realtime/calls` に SDP を直接送る方式とし、モデルは **`gpt-4o-transcribe`** を既定とする（暫定・確定の transcript イベントは Realtime transcription と同様に受け取れる）。([OpenAI Developers][2])
 
 OpenAI APIキーはブラウザに出さず、Next.jsのサーバー側Route Handlerで一時的なクライアントシークレットを発行する構成にします。Next.jsの環境変数はデフォルトではサーバー側のみで利用され、ブラウザに公開するには `NEXT_PUBLIC_` 接頭辞が必要です。Vercelの環境変数はトークンなどの機密値管理に使えます。([Next.js][3])
 
@@ -170,8 +170,8 @@ Vercel上のNext.jsアプリとして動作させます。
 
 ### モデル選定（MVP）
 
-* **既定**: `gpt-4o-transcribe` — リアルタイム transcription セッションで利用でき、**語誤りが少ない用途に向く**（公式ドキュメントでもファイル向き・高精度用途として位置づけられる一方、ライブ用途にも transcription_sessions で接続できる）。
-* **任意**: `gpt-realtime-whisper` — 低遅延の部分テキスト寄り。**GA Realtime 経路の制約**があり、アカウントによっては `transcription_sessions` で拒否される場合があるため、環境変数 `OPENAI_REALTIME_TRANSCRIPTION_MODEL` でのみ切り替え、本番既定は `gpt-4o-transcribe` とする。
+* **既定**: `gpt-4o-transcribe` — Realtime の transcription セッションで利用でき、**語誤りが少ない用途に向く**（公式ドキュメントでもファイル向き・高精度用途として位置づけられる一方、ライブ用途にも `client_secrets` 経由で接続できる）。
+* **任意**: `gpt-realtime-whisper` — 低遅延の部分テキスト寄り。**モデル・セッション種別の組み合わせやアカウント設定**によっては OpenAI 側でエラーになる場合があるため、環境変数 `OPENAI_REALTIME_TRANSCRIPTION_MODEL` でのみ切り替え、本番既定は `gpt-4o-transcribe` とする。
 
 ---
 
@@ -375,7 +375,7 @@ OpenAI Realtime API用の一時セッションを発行します。
 ### 責務
 
 * 認証済み Cookie の確認
-* サーバーから `POST /v1/realtime/transcription_sessions` を呼び出し（body は `gpt-4o-transcribe` 既定）、**短命 `client_secret` の文字列**と有効期限を返す
+* サーバーから `POST /v1/realtime/client_secrets` を呼び出し（`session.type: transcription`、body は `lib/openai-realtime-session.ts` で組み立て）、**短命トークン**（OpenAI 応答の `value`）を **`client_secret` キー**でブラウザへ返す（`expires_at` も返す）
 * 標準 API キーはレスポンスに含めない
 
 ---
@@ -428,7 +428,7 @@ lib/
 | `lib/auth.ts`            | Cookie署名・検証              |
 | `lib/cache.ts`           | localStorage保存・復元・期限切れ削除 |
 | `lib/realtime-client.ts` | OpenAI Realtime WebRTC 接続（ephemeral → `/v1/realtime/calls`） |
-| `lib/openai-realtime-session.ts` | `transcription_sessions` 用 JSON body の組み立て |
+| `lib/openai-realtime-session.ts` | `POST /v1/realtime/client_secrets` 用 JSON body の組み立て |
 | `lib/display-media.ts`   | `getDisplayMedia()` 呼び出し |
 | `lib/constants.ts`       | TTL、モデル名、状態定義            |
 | `lib/types.ts`           | 型定義                      |
@@ -599,7 +599,7 @@ MVP完了条件は以下です。
 11. エラーハンドリング
 12. Vercel環境変数設定
 13. Vercelデプロイ
-14. Chromeタブ音声で動作確認
+14. Chromeタブ音声で最終確認
 ```
 
 ---
@@ -614,7 +614,7 @@ TypeScript
 Tailwind CSS
 Vercel
 getDisplayMedia()
-OpenAI Realtime API（transcription_sessions + WebRTC calls）
+OpenAI Realtime API（client_secrets + WebRTC calls）
 gpt-4o-transcribe
 WebRTC
 簡易パスコード認証

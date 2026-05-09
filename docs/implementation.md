@@ -1,6 +1,6 @@
 以下の方針で実装手順書を作成します。
 
-重要な更新点として、OpenAI Realtime のブラウザ接続は **ephemeral token 方式** とする。サーバーが `POST /v1/realtime/transcription_sessions` で短命クライアントシークレットを発行し、ブラウザが `Authorization: Bearer <ephemeral>` で `POST https://api.openai.com/v1/realtime/calls` に SDP offer を直接送る。標準 API キーはサーバーのみが保持する。([OpenAI Developers][1])
+重要な更新点として、OpenAI Realtime のブラウザ接続は **ephemeral token 方式** とする。サーバーが `POST /v1/realtime/client_secrets` で短命クライアントシークレットを発行し、ブラウザが `Authorization: Bearer <ephemeral>` で `POST https://api.openai.com/v1/realtime/calls` に SDP offer を直接送る。標準 API キーはサーバーのみが保持する。([OpenAI Developers][1])
 
 ---
 
@@ -16,7 +16,7 @@ Vercel
 簡易パスコード認証
 HttpOnly Cookie
 getDisplayMedia()
-WebRTC（transcription_sessions → /v1/realtime/calls）
+WebRTC（client_secrets → /v1/realtime/calls）
 OpenAI Realtime transcription
 gpt-4o-transcribe（精度優先・既定。環境変数で切替可）
 localStorage 24時間キャッシュ
@@ -46,9 +46,9 @@ MVPでは以下の流れにします。
 ブラウザ
   ↓ POST /api/realtime/session（Cookie 認証）
 Next.js API
-  ↓ POST /v1/realtime/transcription_sessions（標準 API キー）
+  ↓ POST /v1/realtime/client_secrets（標準 API キー）
 OpenAI
-  ↓ client_secret（短命トークン）を JSON で返す
+  ↓ OpenAI が `value`（短命トークン）等を返す → Route Handler がブラウザ向け JSON の `client_secret` に載せて返す
 ブラウザ
   ↓ createOffer() → POST https://api.openai.com/v1/realtime/calls（Bearer = client_secret）
 OpenAI
@@ -93,7 +93,7 @@ PR-08: OpenAI Realtime 一時セッション API
 PR-09: WebRTC接続クライアント
 PR-10: transcriptイベント反映
 PR-11: 停止・コピー・クリア・エラー整理
-PR-12: Vercelデプロイ・動作確認
+PR-12: Vercelデプロイ・リリース確認
 ```
 
 ---
@@ -547,7 +547,7 @@ export function stopMediaStream(stream: MediaStream | null): void {
 
 ## 目的
 
-認証済みクライアント向けに、`POST https://api.openai.com/v1/realtime/transcription_sessions` をサーバーから呼び出し、**短命の `client_secret`** を JSON で返す。リクエスト body は `lib/openai-realtime-session.ts` の `buildTranscriptionSessionBody()` に集約する。
+認証済みクライアント向けに、`POST https://api.openai.com/v1/realtime/client_secrets` をサーバーから呼び出し、**WebRTC の `POST /v1/realtime/calls` と整合する短命トークン**（OpenAI 応答の `value`）を取得し、ブラウザ向け JSON の `client_secret` として返す。リクエスト body は `lib/openai-realtime-session.ts` の `buildRealtimeClientSecretBody()` に集約する。
 
 ## 追加ファイル
 
@@ -556,25 +556,38 @@ app/api/realtime/session/route.ts
 lib/openai-realtime-session.ts
 ```
 
-## 採用する transcription_sessions の body（既定：`gpt-4o-transcribe`）
+## 採用する `client_secrets` の body（既定モデル：`gpt-4o-transcribe`）
+
+`session.type` は `transcription`。以下は `gpt-4o-transcribe` かつ `server_vad` の例（実装と一致）。
 
 ```json
 {
-  "input_audio_format": "pcm16",
-  "input_audio_transcription": {
-    "model": "gpt-4o-transcribe",
-    "language": "ja"
+  "expires_after": {
+    "anchor": "created_at",
+    "seconds": 600
   },
-  "turn_detection": {
-    "type": "server_vad",
-    "threshold": 0.5,
-    "prefix_padding_ms": 300,
-    "silence_duration_ms": 500
+  "session": {
+    "type": "transcription",
+    "audio": {
+      "input": {
+        "format": { "type": "audio/pcm", "rate": 24000 },
+        "transcription": {
+          "model": "gpt-4o-transcribe",
+          "language": "ja"
+        },
+        "turn_detection": {
+          "type": "server_vad",
+          "threshold": 0.5,
+          "prefix_padding_ms": 300,
+          "silence_duration_ms": 500
+        }
+      }
+    }
   }
 }
 ```
 
-`language` は ISO-639-1 の言語ヒント。`delay` は **`gpt-realtime-whisper` の GA Realtime セッションでのみ**意味があり、MVP 既定の `gpt-4o-transcribe` では送らない（実装でもモデルが whisper のときだけ付与する）。([OpenAI Developers][6])
+`gpt-realtime-whisper` に切り替える場合は API 制約により **`turn_detection` を `null`** にし、`transcription.delay`（例: `"low"`）を付与する（実装参照）。([OpenAI Developers][6])
 
 複数 Organization がある場合は、環境変数 `OPENAI_ORGANIZATION=org_…` を設定し、リクエストヘッダ `OpenAI-Organization` に渡す（表示名は不可）。
 
@@ -585,14 +598,15 @@ lib/openai-realtime-session.ts
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME, verifyAuthValue } from "@/lib/auth";
-import { OPENAI_TRANSCRIPTION_SESSIONS_URL } from "@/lib/constants";
-import { buildTranscriptionSessionBody } from "@/lib/openai-realtime-session";
+import { OPENAI_REALTIME_CLIENT_SECRETS_URL } from "@/lib/constants";
+import { buildRealtimeClientSecretBody } from "@/lib/openai-realtime-session";
 
 export const runtime = "nodejs";
 
 export async function POST() {
   const cookieStore = await cookies();
-  if (!verifyAuthValue(cookieStore.get(AUTH_COOKIE_NAME)?.value)) {
+  const authCookie = cookieStore.get(AUTH_COOKIE_NAME)?.value;
+  if (!verifyAuthValue(authCookie)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const apiKey = process.env.OPENAI_API_KEY;
@@ -607,18 +621,21 @@ export async function POST() {
   const org = process.env.OPENAI_ORGANIZATION?.trim();
   if (org) headers["OpenAI-Organization"] = org;
 
-  const upstream = await fetch(OPENAI_TRANSCRIPTION_SESSIONS_URL, {
+  const upstream = await fetch(OPENAI_REALTIME_CLIENT_SECRETS_URL, {
     method: "POST",
     headers,
-    body: buildTranscriptionSessionBody(),
+    body: buildRealtimeClientSecretBody(),
   });
   if (!upstream.ok) {
     return NextResponse.json({ error: await upstream.text() }, { status: upstream.status });
   }
-  const data = await upstream.json();
+  const data = (await upstream.json()) as { value?: string; expires_at?: number };
+  if (!data.value) {
+    return NextResponse.json({ error: "token missing" }, { status: 500 });
+  }
   return NextResponse.json({
-    client_secret: data.client_secret.value,
-    expires_at: data.client_secret.expires_at,
+    client_secret: data.value,
+    expires_at: data.expires_at,
   });
 }
 ```
@@ -807,7 +824,7 @@ clearTranscriptCache();
 
 ---
 
-# 15. PR-12：Vercelデプロイ・動作確認
+# 15. PR-12：Vercelデプロイ・リリース確認
 
 ## 目的
 
@@ -843,7 +860,7 @@ vercel --prod
 
 またはGitHub連携でmainブランチをProduction Deployにします。
 
-## 本番動作確認チェックリスト
+## 本番リリース前チェックリスト
 
 ```txt
 [ ] Vercel URLがHTTPSで開ける
@@ -885,7 +902,7 @@ Chromeタブを選択し、「音声を共有」をONにしてください。
 
 ## 16.4 文字起こしモデルと `delay`
 
-* **MVP 既定は `gpt-4o-transcribe`**。語誤りを抑えたいタブ音声向き。`transcription_sessions` の body では **`delay` は付けない**（whisper 専用パラメータのため）。
+* **MVP 既定は `gpt-4o-transcribe`**。語誤りを抑えたいタブ音声向き。`client_secrets` の transcription セッションでは **`delay` は付けない**（`gpt-realtime-whisper` 向けパラメータのため）。
 * **`gpt-realtime-whisper` に切り替える場合のみ**（環境変数 `OPENAI_REALTIME_TRANSCRIPTION_MODEL`）、GA Realtime 経路で `delay`（`minimal` / `low` / …）が意味を持つ。公式の遅延チューニングは Realtime transcription ガイドを参照。([OpenAI Developers][2])
 
 ---
@@ -901,7 +918,7 @@ Chromeタブを選択し、「音声を共有」をONにしてください。
 | PR-05 | キャッシュ          | localStorage 24時間保存/復元/削除          |
 | PR-06 | UI骨格           | ボタン、状態、表示欄                         |
 | PR-07 | 音声取得           | getDisplayMedia、音声トラック検証           |
-| PR-08 | Realtime 一時セッション | `/api/realtime/session`、`transcription_sessions` |
+| PR-08 | Realtime 一時セッション | `/api/realtime/session`、`POST /v1/realtime/client_secrets` |
 | PR-09 | WebRTC接続       | RTCPeerConnection、DataChannel      |
 | PR-10 | transcript反映   | delta/completedイベントをUIへ反映          |
 | PR-11 | UX仕上げ          | 停止、コピー、クリア、エラー                     |
@@ -932,5 +949,5 @@ OpenAI APIキーはブラウザに露出しない
 [3]: https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia "MediaDevices: getDisplayMedia() method - Web APIs | MDN"
 [4]: https://vercel.com/docs/environment-variables "Environment variables"
 [5]: https://nextjs.org/docs/app/api-reference/functions/cookies "Functions: cookies | Next.js"
-[6]: https://developers.openai.com/api/reference/resources/realtime/subresources/transcription_sessions/methods/create/ "Create transcription session | OpenAI API Reference"
+[6]: https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create/ "Create client secret | OpenAI API Reference"
 [7]: https://vercel.com/docs/environment-variables/managing-environment-variables "Managing environment variables"

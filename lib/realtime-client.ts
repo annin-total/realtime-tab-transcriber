@@ -21,10 +21,7 @@ type SessionResponse = {
   error?: string;
 };
 
-/**
- * Step 1: 自サーバーから ephemeral token を取得する（gpt-realtime-whisper 用）
- * サーバーが `/v1/realtime/transcription_sessions` を呼び出し短命トークンを返す
- */
+/** 認証付き `/api/realtime/session` から短命トークンを取得する */
 async function fetchEphemeralToken(): Promise<string> {
   const res = await fetch(API_PATH_REALTIME_SESSION, {
     method: "POST",
@@ -44,16 +41,11 @@ async function fetchEphemeralToken(): Promise<string> {
 }
 
 /**
- * タブ共有で得た `MediaStream` の音声を OpenAI Realtime（WebRTC）へ送る接続を張る。
+ * タブ共有の `MediaStream` 音声を OpenAI Realtime（WebRTC）へ送る。
+ * サーバー発行の短命トークンで `calls` に SDP を POST し、DataChannel でイベントを受け取る。
  *
- * フロー（公式 ephemeral token 方式 for gpt-realtime-whisper）:
- * 1. `/api/realtime/session` → サーバーが transcription_sessions を呼び出して短命トークンを返す
- * 2. ブラウザが SDP offer を直接 `https://api.openai.com/v1/realtime/calls` へ Bearer 認証で送る
- * 3. SDP answer を受け取り setRemoteDescription → WebRTC 接続完了
- *
- * @param assignTo 接続オブジェクトを同期的に格納する参照
+ * @param assignTo 接続確立後に同期的に代入する ref（省略可）
  * @see https://developers.openai.com/api/docs/guides/realtime-webrtc
- * @see https://developers.openai.com/api/reference/resources/realtime/subresources/transcription_sessions
  */
 export async function connectRealtime(
   stream: MediaStream,
@@ -85,14 +77,11 @@ export async function connectRealtime(
   };
 
   try {
-    /* Step 1: 短命 ephemeral token を取得 */
     const ephemeralToken = await fetchEphemeralToken();
 
-    /* Step 2: SDP offer を生成 */
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
 
-    /* Step 3: ブラウザから直接 OpenAI /v1/realtime/calls へ送る */
     const response = await fetch(OPENAI_REALTIME_CALLS_URL, {
       method: "POST",
       body: offer.sdp ?? "",
@@ -116,7 +105,6 @@ export async function connectRealtime(
       throw new Error(message);
     }
 
-    /* Step 4: SDP answer を適用して接続確立 */
     const answer: RTCSessionDescriptionInit = {
       type: "answer",
       sdp: await response.text(),

@@ -39,7 +39,7 @@ export async function POST() {
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
   };
-  const orgId = process.env.OPENAI_ORGANIZATION?.trim();
+  const orgId = process.env.OPENAI_ORGANIZATION_ID?.trim();
   if (orgId) {
     headers["OpenAI-Organization"] = orgId;
   }

@@ -19,9 +19,7 @@ type ActionButtonsProps = {
   startBusy: boolean;
 };
 
-/**
- * 開始・停止・コピー・クリア。開始でタブ共有 UI（PR-07）
- */
+/** 開始・停止・コピー・クリア */
 export function ActionButtons({
   status,
   onStart,

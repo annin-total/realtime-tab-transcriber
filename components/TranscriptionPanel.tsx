@@ -39,9 +39,7 @@ function buildClipboardText(tentative: string, final: string): string {
   return parts.join("\n\n");
 }
 
-/**
- * 文字起こし画面の状態と子コンポーネントを束ねる親（PR-07〜10: 共有・WebRTC・transcript）
- */
+/** 文字起こし画面の状態と子コンポーネントを束ねる親 */
 export function TranscriptionPanel() {
   const streamRef = useRef<MediaStream | null>(null);
   const realtimeRef = useRef<RealtimeConnection | null>(null);
