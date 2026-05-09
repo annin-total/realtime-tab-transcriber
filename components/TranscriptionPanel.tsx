@@ -8,6 +8,11 @@ import {
   useState,
 } from "react";
 import {
+  ERR_COPY_FAILED,
+  ERR_DISPLAY_CANCELLED,
+  NOTICE_SHARE_ENDED,
+} from "@/constants/transcription-errors";
+import {
   TRANSCRIPTION_INSTRUCTION,
   TRANSCRIPTION_PAGE_TITLE,
 } from "@/constants/transcription-ui";
@@ -22,6 +27,7 @@ import {
 } from "@/lib/display-media";
 import { connectRealtime } from "@/lib/realtime-client";
 import type { RealtimeConnection } from "@/lib/realtime-client";
+import { mapTranscriptionFlowError } from "@/lib/map-transcription-error";
 import { parseTranscriptEvent } from "@/lib/transcript-events";
 import type { AppStatus } from "@/lib/types";
 import { ActionButtons } from "./ActionButtons";
@@ -94,7 +100,7 @@ export function TranscriptionPanel() {
           ? "stopped"
           : prev,
       );
-      setNotice("共有が終了しました。");
+      setNotice(NOTICE_SHARE_ENDED);
     };
 
     const tracks = stream.getTracks();
@@ -149,7 +155,7 @@ export function TranscriptionPanel() {
             setStatus("transcribing");
           },
           onError: (err) => {
-            setErrorDetail(err.message);
+            setErrorDetail(mapTranscriptionFlowError(err));
             setStatus("error");
             releaseDisplayStream();
           },
@@ -161,14 +167,10 @@ export function TranscriptionPanel() {
       const domName = e instanceof DOMException ? e.name : "";
       if (domName === "NotAllowedError" || domName === "AbortError") {
         setStatus("idle");
-        setNotice("共有がキャンセルされました。");
+        setNotice(ERR_DISPLAY_CANCELLED);
         return;
       }
-      const message =
-        e instanceof Error
-          ? e.message
-          : "画面共有または接続の開始に失敗しました。";
-      setErrorDetail(message);
+      setErrorDetail(mapTranscriptionFlowError(e));
       setStatus("error");
     } finally {
       setStartBusy(false);
@@ -179,6 +181,7 @@ export function TranscriptionPanel() {
     userInitiatedStopRef.current = true;
     setNotice(null);
     setErrorDetail(null);
+    setTentativeText("");
     releaseDisplayStream();
 
     setStatus((prev) => {
@@ -201,7 +204,7 @@ export function TranscriptionPanel() {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      setNotice("コピーに失敗しました。ブラウザの権限を確認してください。");
+      setNotice(ERR_COPY_FAILED);
     }
   }, [tentativeText, finalText]);
 

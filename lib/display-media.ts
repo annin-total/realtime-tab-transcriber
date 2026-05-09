@@ -1,3 +1,8 @@
+import {
+  ERR_AUDIO_SHARE_OFF,
+  ERR_UNSUPPORTED_BROWSER,
+} from "@/constants/transcription-errors";
+
 /**
  * `getDisplayMedia` の音声制約に、Chromium の `suppressLocalAudioPlayback` を含める
  */
@@ -24,7 +29,7 @@ type ExtendedDisplayMediaOptions = DisplayMediaStreamOptions & {
  */
 export async function requestTabAudioStream(): Promise<MediaStream> {
   if (!navigator.mediaDevices?.getDisplayMedia) {
-    throw new Error("このブラウザでは画面共有APIを利用できません");
+    throw new Error(ERR_UNSUPPORTED_BROWSER);
   }
 
   const audio: ChromiumDisplayAudioConstraints = {
@@ -47,9 +52,7 @@ export async function requestTabAudioStream(): Promise<MediaStream> {
 
   if (stream.getAudioTracks().length === 0) {
     stopMediaStream(stream);
-    throw new Error(
-      "音声を取得できませんでした。タブ共有時に音声共有をONにしてください。",
-    );
+    throw new Error(ERR_AUDIO_SHARE_OFF);
   }
 
   return stream;

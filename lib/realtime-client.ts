@@ -1,4 +1,8 @@
 import {
+  ERR_AUDIO_SHARE_OFF,
+  ERR_OPENAI_CONNECTION,
+} from "@/constants/transcription-errors";
+import {
   API_PATH_REALTIME_SESSION,
   OPENAI_REALTIME_CALLS_URL,
 } from "./constants";
@@ -57,7 +61,7 @@ export async function connectRealtime(
   const audioTrack = stream.getAudioTracks()[0];
   if (!audioTrack) {
     peer.close();
-    throw new Error("音声トラックがありません");
+    throw new Error(ERR_AUDIO_SHARE_OFF);
   }
 
   peer.addTrack(audioTrack, stream);
@@ -66,7 +70,7 @@ export async function connectRealtime(
 
   dataChannel.onopen = () => handlers.onOpen?.();
   dataChannel.onerror = () => {
-    handlers.onError?.(new Error("DataChannel error"));
+    handlers.onError?.(new Error(ERR_OPENAI_CONNECTION));
   };
   dataChannel.onmessage = (message) => {
     try {

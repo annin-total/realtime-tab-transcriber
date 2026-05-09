@@ -774,6 +774,16 @@ function handleRealtimeEvent(raw: unknown) {
 
 MVPとして実用できる操作を揃える。
 
+## 追加・更新ファイル（本リポジトリでの配置）
+
+```txt
+constants/transcription-errors.ts   … ユーザー向け固定文言（下表と一致）
+lib/map-transcription-error.ts      … 例外メッセージを表の文言へ正規化
+components/TranscriptionPanel.tsx   … 停止時の暫定クリア、エラー／通知の適用
+lib/display-media.ts                … 非対応ブラウザ・音声 OFF 時の文言
+lib/realtime-client.ts              … DataChannel 失敗時の文言
+```
+
 ## 実装内容
 
 ### 停止
@@ -791,11 +801,15 @@ function stopTranscription() {
 }
 ```
 
+実装コードでは暫定テキストの state 名は `tentativeText` とし、停止時に同様に空へ戻す。
+
 ### コピー
 
 ```ts
 await navigator.clipboard.writeText(finalText);
 ```
+
+暫定と確定の両方をコピーする場合は、ラベル付きで結合して `writeText` する（本リポジトリの `buildClipboardText`）。
 
 ### クリア
 
@@ -810,9 +824,9 @@ clearTranscriptCache();
 | 状況           | 表示                      |
 | ------------ | ----------------------- |
 | 音声共有OFF      | タブ共有時に「音声を共有」をONにしてください |
-| ユーザーが共有キャンセル | 共有がキャンセルされました           |
-| APIキー未設定     | サーバー設定に問題があります          |
-| OpenAI接続失敗   | 文字起こしサービスへの接続に失敗しました    |
+| ユーザーが共有キャンセル | 共有がキャンセルされました。          |
+| APIキー未設定     | サーバー設定に問題があります。         |
+| OpenAI接続失敗   | 文字起こしサービスへの接続に失敗しました。   |
 | 非対応ブラウザ      | macOS版Chrome最新版をご利用ください |
 
 ## 受け入れ条件
