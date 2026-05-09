@@ -13,10 +13,14 @@ type ActionButtonsProps = {
   onCopy: () => void;
   onClear: () => void;
   hasTranscript: boolean;
+  /** タブ共有で `MediaStream` を保持中（停止でトラックを止めるまで） */
+  mediaCaptureActive: boolean;
+  /** `getDisplayMedia` 呼び出し中（二重開始防止） */
+  startBusy: boolean;
 };
 
 /**
- * 開始・停止・コピー・クリア。PR-06 では音声取得は行わない
+ * 開始・停止・コピー・クリア。開始でタブ共有 UI（PR-07）
  */
 export function ActionButtons({
   status,
@@ -25,12 +29,21 @@ export function ActionButtons({
   onCopy,
   onClear,
   hasTranscript,
+  mediaCaptureActive,
+  startBusy,
 }: ActionButtonsProps) {
-  const canStart = status === "idle" || status === "stopped";
+  const canStart =
+    (status === "idle" ||
+      status === "stopped" ||
+      status === "error") &&
+    !mediaCaptureActive &&
+    !startBusy;
   const canStop =
+    mediaCaptureActive ||
     status === "requesting_display" ||
     status === "connecting" ||
-    status === "transcribing";
+    status === "transcribing" ||
+    status === "error";
   const canCopyOrClear = hasTranscript;
 
   const baseBtn =

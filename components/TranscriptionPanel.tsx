@@ -1,6 +1,12 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useState } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   TRANSCRIPTION_INSTRUCTION,
   TRANSCRIPTION_PAGE_TITLE,
@@ -10,6 +16,10 @@ import {
   loadTranscriptCache,
   saveTranscriptCache,
 } from "@/lib/cache";
+import {
+  requestTabAudioStream,
+  stopMediaStream,
+} from "@/lib/display-media";
 import type { AppStatus } from "@/lib/types";
 import { ActionButtons } from "./ActionButtons";
 import { StatusBadge } from "./StatusBadge";
@@ -27,14 +37,20 @@ function buildClipboardText(tentative: string, final: string): string {
 }
 
 /**
- * 文字起こし画面の状態と子コンポーネントを束ねる親（PR-06 では音声・接続は未実装）
+ * 文字起こし画面の状態と子コンポーネントを束ねる親（PR-07: タブ音声取得まで）
  */
 export function TranscriptionPanel() {
+  const streamRef = useRef<MediaStream | null>(null);
+  /** 停止ボタン由来の解放か（トラック `ended` と二重通知を防ぐ） */
+  const userInitiatedStopRef = useRef(false);
   const [status, setStatus] = useState<AppStatus>("idle");
   const [tentativeText, setTentativeText] = useState("");
   const [finalText, setFinalText] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [cacheHydrated, setCacheHydrated] = useState(false);
+  const [hasDisplayStream, setHasDisplayStream] = useState(false);
+  const [startBusy, setStartBusy] = useState(false);
 
   useEffect(() => {
     startTransition(() => {
@@ -48,25 +64,101 @@ export function TranscriptionPanel() {
     saveTranscriptCache(finalText);
   }, [finalText, cacheHydrated]);
 
+  /** 共有終了（トラック ended / 停止ボタン）でストリーム参照を外す */
+  const releaseDisplayStream = useCallback(() => {
+    stopMediaStream(streamRef.current);
+    streamRef.current = null;
+    setHasDisplayStream(false);
+  }, []);
+
+  /** ブラウザ側で共有が切れたとき */
+  useEffect(() => {
+    if (!hasDisplayStream || !streamRef.current) return;
+
+    const stream = streamRef.current;
+    let ended = false;
+    const onEnded = () => {
+      if (ended) return;
+      ended = true;
+      if (userInitiatedStopRef.current) {
+        userInitiatedStopRef.current = false;
+        return;
+      }
+      stopMediaStream(stream);
+      if (streamRef.current === stream) {
+        streamRef.current = null;
+      }
+      setHasDisplayStream(false);
+      setStatus((prev) =>
+        prev === "transcribing" || prev === "connecting"
+          ? "stopped"
+          : prev,
+      );
+      setNotice("共有が終了しました。");
+    };
+
+    const tracks = stream.getTracks();
+    tracks.forEach((t) => t.addEventListener("ended", onEnded));
+    return () => {
+      tracks.forEach((t) => t.removeEventListener("ended", onEnded));
+    };
+  }, [hasDisplayStream]);
+
   const hasTranscript = Boolean(tentativeText.trim() || finalText.trim());
 
-  const handleStart = useCallback(() => {
-    setNotice(null);
-    if (status !== "idle" && status !== "stopped") return;
-    setStatus("requesting_display");
-  }, [status]);
-
-  const handleStop = useCallback(() => {
-    setNotice(null);
-    if (
-      status !== "requesting_display" &&
-      status !== "connecting" &&
-      status !== "transcribing"
-    ) {
+  const handleStart = useCallback(async () => {
+    if (status !== "idle" && status !== "stopped" && status !== "error") {
       return;
     }
-    setStatus("stopped");
-  }, [status]);
+    if (hasDisplayStream || startBusy) return;
+
+    setNotice(null);
+    setErrorDetail(null);
+    setStartBusy(true);
+    setStatus("requesting_display");
+
+    try {
+      const stream = await requestTabAudioStream();
+      streamRef.current = stream;
+      setHasDisplayStream(true);
+      setStatus("transcribing");
+    } catch (e) {
+      releaseDisplayStream();
+      const domName = e instanceof DOMException ? e.name : "";
+      if (domName === "NotAllowedError" || domName === "AbortError") {
+        setStatus("idle");
+        setNotice("共有がキャンセルされました。");
+        return;
+      }
+      const message =
+        e instanceof Error
+          ? e.message
+          : "画面共有の開始に失敗しました。";
+      setErrorDetail(message);
+      setStatus("error");
+    } finally {
+      setStartBusy(false);
+    }
+  }, [hasDisplayStream, releaseDisplayStream, startBusy, status]);
+
+  const handleStop = useCallback(() => {
+    userInitiatedStopRef.current = true;
+    setNotice(null);
+    setErrorDetail(null);
+    releaseDisplayStream();
+
+    setStatus((prev) => {
+      if (prev === "error") return "idle";
+      if (
+        prev === "requesting_display" ||
+        prev === "connecting" ||
+        prev === "transcribing"
+      ) {
+        return "stopped";
+      }
+      return prev;
+    });
+  }, [releaseDisplayStream]);
 
   const handleCopy = useCallback(async () => {
     setNotice(null);
@@ -80,12 +172,15 @@ export function TranscriptionPanel() {
   }, [tentativeText, finalText]);
 
   const handleClear = useCallback(() => {
+    userInitiatedStopRef.current = true;
     setNotice(null);
+    setErrorDetail(null);
+    releaseDisplayStream();
     setTentativeText("");
     setFinalText("");
     clearTranscriptCache();
     setStatus("idle");
-  }, []);
+  }, [releaseDisplayStream]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -100,11 +195,15 @@ export function TranscriptionPanel() {
 
       <ActionButtons
         status={status}
-        onStart={handleStart}
+        onStart={() => {
+          void handleStart();
+        }}
         onStop={handleStop}
         onCopy={handleCopy}
         onClear={handleClear}
         hasTranscript={hasTranscript}
+        mediaCaptureActive={hasDisplayStream}
+        startBusy={startBusy}
       />
 
       {notice ? (
@@ -116,7 +215,7 @@ export function TranscriptionPanel() {
         </p>
       ) : null}
 
-      <StatusBadge status={status} />
+      <StatusBadge status={status} errorDetail={errorDetail} />
 
       <TranscriptViewer tentativeText={tentativeText} finalText={finalText} />
     </div>
