@@ -1,0 +1,1 @@
+/Users/terasawayuki/Documents/program/Development/realtime-tab-transcriber/.ai-configs/shared/claude/commands/workflow-extract-colors.md

@@ -1,0 +1,1 @@
+/Users/terasawayuki/Documents/program/Development/realtime-tab-transcriber/.ai-configs/shared/workflows/remove-debug-logs.md
