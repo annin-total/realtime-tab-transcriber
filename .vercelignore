@@ -1,0 +1,4 @@
+# Vercel ビルドに送らない（アプリ実行には不要・サブモジュール・AI ツール用リンク）
+.ai-configs
+AGENTS.md
+CLAUDE.md

@@ -159,13 +159,28 @@ export function TranscriptionPanel() {
         return;
       }
 
-      const line: TranscriptLine = {
-        id: crypto.randomUUID(),
-        source,
-        text: event.text,
-        createdAt: Date.now(),
-      };
-      setLines((prev) => [...prev, line]);
+      /* 直前の確定行と同一ソースならラベル繰り返しを避け、本文を連続表示する */
+      setLines((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.source === source) {
+          return [
+            ...prev.slice(0, -1),
+            {
+              ...last,
+              text: `${last.text}\n${event.text}`,
+            },
+          ];
+        }
+        return [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            source,
+            text: event.text,
+            createdAt: Date.now(),
+          },
+        ];
+      });
       if (source === "tab") {
         setPartialTab("");
       } else {
