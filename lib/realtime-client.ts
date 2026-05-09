@@ -1,7 +1,14 @@
-import { API_PATH_REALTIME_SDP } from "./constants";
+import {
+  ERR_AUDIO_SHARE_OFF,
+  ERR_OPENAI_CONNECTION,
+} from "@/constants/transcription-errors";
+import {
+  API_PATH_REALTIME_SESSION,
+  OPENAI_REALTIME_CALLS_URL,
+} from "./constants";
 
 /** DataChannel で受け取る生 JSON イベントを渡す */
-type RealtimeHandlers = {
+export type RealtimeHandlers = {
   onEvent: (event: unknown) => void;
   onOpen?: () => void;
   onError?: (error: Error) => void;
@@ -13,22 +20,48 @@ export type RealtimeConnection = {
   close: () => void;
 };
 
-export type { RealtimeHandlers };
+type SessionResponse = {
+  client_secret?: string;
+  error?: string;
+};
+
+/** 認証付き `/api/realtime/session` から短命トークンを取得する */
+async function fetchEphemeralToken(): Promise<string> {
+  const res = await fetch(API_PATH_REALTIME_SESSION, {
+    method: "POST",
+    credentials: "same-origin",
+  });
+
+  const data = (await res.json()) as SessionResponse;
+
+  if (!res.ok || !data.client_secret) {
+    throw new Error(
+      data.error ??
+        `セッション取得に失敗しました（HTTP ${res.status}）`,
+    );
+  }
+
+  return data.client_secret;
+}
 
 /**
- * タブ共有で得た `MediaStream` の音声を OpenAI Realtime（WebRTC）へ送る接続を張る。
- * SDP は同一オリジンの `/api/realtime/sdp` 経由で中継し、Cookie 認証が付く。
+ * タブ共有の `MediaStream` 音声を OpenAI Realtime（WebRTC）へ送る。
+ * サーバー発行の短命トークンで `calls` に SDP を POST し、DataChannel でイベントを受け取る。
+ *
+ * @param assignTo 接続確立後に同期的に代入する ref（省略可）
+ * @see https://developers.openai.com/api/docs/guides/realtime-webrtc
  */
 export async function connectRealtime(
   stream: MediaStream,
   handlers: RealtimeHandlers,
+  assignTo?: { current: RealtimeConnection | null } | null,
 ): Promise<RealtimeConnection> {
   const peer = new RTCPeerConnection();
 
   const audioTrack = stream.getAudioTracks()[0];
   if (!audioTrack) {
     peer.close();
-    throw new Error("音声トラックがありません");
+    throw new Error(ERR_AUDIO_SHARE_OFF);
   }
 
   peer.addTrack(audioTrack, stream);
@@ -37,50 +70,52 @@ export async function connectRealtime(
 
   dataChannel.onopen = () => handlers.onOpen?.();
   dataChannel.onerror = () => {
-    handlers.onError?.(new Error("DataChannel error"));
+    handlers.onError?.(new Error(ERR_OPENAI_CONNECTION));
   };
   dataChannel.onmessage = (message) => {
     try {
       handlers.onEvent(JSON.parse(message.data as string));
     } catch {
-      /* 解析不能メッセージは無視（PR-10 で型付き処理） */
+      /* 解析不能メッセージは無視 */
     }
   };
 
   try {
+    const ephemeralToken = await fetchEphemeralToken();
+
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
 
-    const response = await fetch(API_PATH_REALTIME_SDP, {
+    const response = await fetch(OPENAI_REALTIME_CALLS_URL, {
       method: "POST",
       body: offer.sdp ?? "",
-      headers: { "Content-Type": "application/sdp" },
-      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/sdp",
+        Authorization: `Bearer ${ephemeralToken}`,
+      },
     });
 
     if (!response.ok) {
       const raw = await response.text();
-      let message = raw;
+      let message: string;
       try {
-        const parsed = JSON.parse(raw) as { error?: string };
-        if (typeof parsed.error === "string") {
-          message = parsed.error;
-        }
+        const parsed = JSON.parse(raw) as { error?: { message?: string } };
+        message =
+          parsed.error?.message ??
+          `WebRTC 接続に失敗しました（HTTP ${response.status}）`;
       } catch {
-        /* プレーンテキストのエラー本文 */
+        message = `WebRTC 接続に失敗しました（HTTP ${response.status}）`;
       }
       throw new Error(message);
     }
 
-    const answerSdp = await response.text();
     const answer: RTCSessionDescriptionInit = {
       type: "answer",
-      sdp: answerSdp,
+      sdp: await response.text(),
     };
-
     await peer.setRemoteDescription(answer);
 
-    return {
+    const connection: RealtimeConnection = {
       peer,
       dataChannel,
       close: () => {
@@ -92,6 +127,12 @@ export async function connectRealtime(
         peer.close();
       },
     };
+
+    if (assignTo) {
+      assignTo.current = connection;
+    }
+
+    return connection;
   } catch (err) {
     try {
       dataChannel.close();

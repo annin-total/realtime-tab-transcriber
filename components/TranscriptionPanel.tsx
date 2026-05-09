@@ -8,44 +8,76 @@ import {
   useState,
 } from "react";
 import {
+  ERR_COPY_FAILED,
+  ERR_DISPLAY_CANCELLED,
+  NOTICE_MIC_DENIED_TAB_CONTINUES,
+  NOTICE_SHARE_ENDED,
+} from "@/constants/transcription-errors";
+import {
+  LABEL_SOURCE_SELF,
+  LABEL_SOURCE_TAB,
   TRANSCRIPTION_INSTRUCTION,
   TRANSCRIPTION_PAGE_TITLE,
 } from "@/constants/transcription-ui";
 import {
   clearTranscriptCache,
-  loadTranscriptCache,
-  saveTranscriptCache,
+  loadTranscriptLinesCache,
+  saveTranscriptLinesCache,
 } from "@/lib/cache";
 import {
   requestTabAudioStream,
   stopMediaStream,
 } from "@/lib/display-media";
-import type { AppStatus } from "@/lib/types";
+import { requestMicStream, stopMicStream } from "@/lib/microphone";
+import { connectRealtime } from "@/lib/realtime-client";
+import type { RealtimeConnection } from "@/lib/realtime-client";
+import { mapTranscriptionFlowError } from "@/lib/map-transcription-error";
+import { parseTranscriptEvent } from "@/lib/transcript-events";
+import type { AppStatus, TranscriptLine, TranscriptSource } from "@/lib/types";
 import { ActionButtons } from "./ActionButtons";
+import { MicToggle } from "./MicToggle";
 import { StatusBadge } from "./StatusBadge";
-import { TranscriptViewer } from "./TranscriptViewer";
+import { TranscriptTimeline } from "./TranscriptTimeline";
 
-function buildClipboardText(tentative: string, final: string): string {
+/** 暫定・確定をクリップボード用テキストに整形する */
+function buildClipboardText(
+  lines: TranscriptLine[],
+  partialTab: string,
+  partialMic: string,
+): string {
   const parts: string[] = [];
-  if (tentative.trim()) {
-    parts.push(`【暫定】\n${tentative}`);
+  if (partialTab.trim()) {
+    parts.push(`【暫定・${LABEL_SOURCE_TAB}】\n${partialTab}`);
   }
-  if (final.trim()) {
-    parts.push(`【確定】\n${final}`);
+  if (partialMic.trim()) {
+    parts.push(`【暫定・${LABEL_SOURCE_SELF}】\n${partialMic}`);
+  }
+  const confirmed = lines
+    .map((line) => {
+      const tag = line.source === "tab" ? LABEL_SOURCE_TAB : LABEL_SOURCE_SELF;
+      return `【${tag}】\n${line.text}`;
+    })
+    .join("\n\n");
+  if (confirmed.trim()) {
+    parts.push(`【確定】\n${confirmed}`);
   }
   return parts.join("\n\n");
 }
 
-/**
- * 文字起こし画面の状態と子コンポーネントを束ねる親（PR-07: タブ音声取得まで）
- */
+/** 文字起こし画面の状態と子コンポーネントを束ねる親 */
 export function TranscriptionPanel() {
   const streamRef = useRef<MediaStream | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const realtimeTabRef = useRef<RealtimeConnection | null>(null);
+  const realtimeMicRef = useRef<RealtimeConnection | null>(null);
   /** 停止ボタン由来の解放か（トラック `ended` と二重通知を防ぐ） */
   const userInitiatedStopRef = useRef(false);
+
   const [status, setStatus] = useState<AppStatus>("idle");
-  const [tentativeText, setTentativeText] = useState("");
-  const [finalText, setFinalText] = useState("");
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [lines, setLines] = useState<TranscriptLine[]>([]);
+  const [partialTab, setPartialTab] = useState("");
+  const [partialMic, setPartialMic] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [cacheHydrated, setCacheHydrated] = useState(false);
@@ -54,24 +86,37 @@ export function TranscriptionPanel() {
 
   useEffect(() => {
     startTransition(() => {
-      setFinalText(loadTranscriptCache());
+      setLines(loadTranscriptLinesCache());
       setCacheHydrated(true);
     });
   }, []);
 
   useEffect(() => {
     if (!cacheHydrated) return;
-    saveTranscriptCache(finalText);
-  }, [finalText, cacheHydrated]);
+    saveTranscriptLinesCache(lines);
+  }, [lines, cacheHydrated]);
 
-  /** 共有終了（トラック ended / 停止ボタン）でストリーム参照を外す */
-  const releaseDisplayStream = useCallback(() => {
+  /** マイク側の Realtime とストリームのみ解放する（タブは維持） */
+  const releaseMicOnly = useCallback(() => {
+    realtimeMicRef.current?.close();
+    realtimeMicRef.current = null;
+    stopMicStream(micStreamRef.current);
+    micStreamRef.current = null;
+  }, []);
+
+  /** タブ・マイクの Realtime と MediaStream をまとめて解放する */
+  const releaseAllCapture = useCallback(() => {
+    realtimeMicRef.current?.close();
+    realtimeMicRef.current = null;
+    realtimeTabRef.current?.close();
+    realtimeTabRef.current = null;
+    stopMicStream(micStreamRef.current);
+    micStreamRef.current = null;
     stopMediaStream(streamRef.current);
     streamRef.current = null;
     setHasDisplayStream(false);
   }, []);
 
-  /** ブラウザ側で共有が切れたとき */
   useEffect(() => {
     if (!hasDisplayStream || !streamRef.current) return;
 
@@ -84,17 +129,13 @@ export function TranscriptionPanel() {
         userInitiatedStopRef.current = false;
         return;
       }
-      stopMediaStream(stream);
-      if (streamRef.current === stream) {
-        streamRef.current = null;
-      }
-      setHasDisplayStream(false);
+      releaseAllCapture();
       setStatus((prev) =>
         prev === "transcribing" || prev === "connecting"
           ? "stopped"
           : prev,
       );
-      setNotice("共有が終了しました。");
+      setNotice(NOTICE_SHARE_ENDED);
     };
 
     const tracks = stream.getTracks();
@@ -102,9 +143,62 @@ export function TranscriptionPanel() {
     return () => {
       tracks.forEach((t) => t.removeEventListener("ended", onEnded));
     };
-  }, [hasDisplayStream]);
+  }, [hasDisplayStream, releaseAllCapture]);
 
-  const hasTranscript = Boolean(tentativeText.trim() || finalText.trim());
+  const appendRealtimeEvent = useCallback(
+    (source: TranscriptSource, raw: unknown) => {
+      const event = parseTranscriptEvent(raw);
+      if (!event) return;
+
+      if (event.type === "delta") {
+        if (source === "tab") {
+          setPartialTab((prev) => prev + event.text);
+        } else {
+          setPartialMic((prev) => prev + event.text);
+        }
+        return;
+      }
+
+      /* 直前の確定行と同一ソースならラベル繰り返しを避け、本文を連続表示する */
+      setLines((prev) => {
+        const last = prev[prev.length - 1];
+        if (last?.source === source) {
+          return [
+            ...prev.slice(0, -1),
+            {
+              ...last,
+              text: `${last.text}\n${event.text}`,
+            },
+          ];
+        }
+        return [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            source,
+            text: event.text,
+            createdAt: Date.now(),
+          },
+        ];
+      });
+      if (source === "tab") {
+        setPartialTab("");
+      } else {
+        setPartialMic("");
+      }
+    },
+    [],
+  );
+
+  const hasTranscript = Boolean(
+    partialTab.trim() || partialMic.trim() || lines.length > 0,
+  );
+
+  const micToggleDisabled =
+    startBusy ||
+    status === "requesting_display" ||
+    status === "connecting" ||
+    status === "transcribing";
 
   const handleStart = useCallback(async () => {
     if (status !== "idle" && status !== "stopped" && status !== "error") {
@@ -121,31 +215,83 @@ export function TranscriptionPanel() {
       const stream = await requestTabAudioStream();
       streamRef.current = stream;
       setHasDisplayStream(true);
-      setStatus("transcribing");
+      setStatus("connecting");
+
+      await connectRealtime(
+        stream,
+        {
+          onEvent: (raw) => appendRealtimeEvent("tab", raw),
+          onOpen: () => {
+            setStatus("transcribing");
+          },
+          onError: (err) => {
+            setErrorDetail(mapTranscriptionFlowError(err));
+            setStatus("error");
+            releaseAllCapture();
+          },
+        },
+        realtimeTabRef,
+      );
+
+      if (micEnabled) {
+        try {
+          const micStream = await requestMicStream();
+          micStreamRef.current = micStream;
+          await connectRealtime(
+            micStream,
+            {
+              onEvent: (raw) => appendRealtimeEvent("mic", raw),
+              onError: (err) => {
+                setNotice(mapTranscriptionFlowError(err));
+                releaseMicOnly();
+              },
+            },
+            realtimeMicRef,
+          );
+        } catch (micErr) {
+          releaseMicOnly();
+          const domName =
+            micErr instanceof DOMException ? micErr.name : "";
+          if (
+            domName === "NotAllowedError" ||
+            domName === "AbortError"
+          ) {
+            setNotice(NOTICE_MIC_DENIED_TAB_CONTINUES);
+          } else {
+            setNotice(mapTranscriptionFlowError(micErr));
+          }
+        }
+      }
     } catch (e) {
-      releaseDisplayStream();
+      releaseAllCapture();
       const domName = e instanceof DOMException ? e.name : "";
       if (domName === "NotAllowedError" || domName === "AbortError") {
         setStatus("idle");
-        setNotice("共有がキャンセルされました。");
+        setNotice(ERR_DISPLAY_CANCELLED);
         return;
       }
-      const message =
-        e instanceof Error
-          ? e.message
-          : "画面共有の開始に失敗しました。";
-      setErrorDetail(message);
+      setErrorDetail(mapTranscriptionFlowError(e));
       setStatus("error");
     } finally {
       setStartBusy(false);
     }
-  }, [hasDisplayStream, releaseDisplayStream, startBusy, status]);
+  }, [
+    appendRealtimeEvent,
+    hasDisplayStream,
+    micEnabled,
+    releaseAllCapture,
+    releaseMicOnly,
+    startBusy,
+    status,
+  ]);
 
   const handleStop = useCallback(() => {
     userInitiatedStopRef.current = true;
     setNotice(null);
     setErrorDetail(null);
-    releaseDisplayStream();
+    setPartialTab("");
+    setPartialMic("");
+    releaseAllCapture();
 
     setStatus((prev) => {
       if (prev === "error") return "idle";
@@ -158,29 +304,30 @@ export function TranscriptionPanel() {
       }
       return prev;
     });
-  }, [releaseDisplayStream]);
+  }, [releaseAllCapture]);
 
   const handleCopy = useCallback(async () => {
     setNotice(null);
-    const text = buildClipboardText(tentativeText, finalText);
+    const text = buildClipboardText(lines, partialTab, partialMic);
     if (!text.trim()) return;
     try {
       await navigator.clipboard.writeText(text);
     } catch {
-      setNotice("コピーに失敗しました。ブラウザの権限を確認してください。");
+      setNotice(ERR_COPY_FAILED);
     }
-  }, [tentativeText, finalText]);
+  }, [lines, partialTab, partialMic]);
 
   const handleClear = useCallback(() => {
     userInitiatedStopRef.current = true;
     setNotice(null);
     setErrorDetail(null);
-    releaseDisplayStream();
-    setTentativeText("");
-    setFinalText("");
+    releaseAllCapture();
+    setPartialTab("");
+    setPartialMic("");
+    setLines([]);
     clearTranscriptCache();
     setStatus("idle");
-  }, [releaseDisplayStream]);
+  }, [releaseAllCapture]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -192,6 +339,12 @@ export function TranscriptionPanel() {
           {TRANSCRIPTION_INSTRUCTION}
         </p>
       </header>
+
+      <MicToggle
+        checked={micEnabled}
+        disabled={micToggleDisabled}
+        onChange={setMicEnabled}
+      />
 
       <ActionButtons
         status={status}
@@ -217,7 +370,11 @@ export function TranscriptionPanel() {
 
       <StatusBadge status={status} errorDetail={errorDetail} />
 
-      <TranscriptViewer tentativeText={tentativeText} finalText={finalText} />
+      <TranscriptTimeline
+        lines={lines}
+        partialTab={partialTab}
+        partialMic={partialMic}
+      />
     </div>
   );
 }

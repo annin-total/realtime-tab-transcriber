@@ -21,7 +21,7 @@ Chromeタブ音声
 
 `getDisplayMedia()` は、ユーザーに画面・ウィンドウ・タブの共有対象を選ばせ、許可された内容を `MediaStream` として取得できるWeb APIです。HTTPSなどの安全なコンテキストで利用され、ユーザー操作と毎回の許可が必要です。今回の「開始ボタン → Chromeタブ共有 → 音声共有ON → 文字起こし開始」というUXと合います。([MDNウェブドキュメント][1])
 
-OpenAI Realtime API は、ブラウザ・モバイルのリアルタイム音声用途では WebRTC が推奨されており、`gpt-realtime-whisper` はライブ音声から低遅延で transcript delta を返すストリーミング音声認識モデルとして公式に提供されています。([OpenAI Developers][2])
+OpenAI Realtime API は、ブラウザ・モバイルのリアルタイム音声用途では WebRTC が推奨されています。MVPでは文字起こし**精度**を優先し、サーバーが `POST /v1/realtime/client_secrets` で発行した短命トークンを用いてブラウザから `POST /v1/realtime/calls` に SDP を直接送る方式とし、モデルは **`gpt-4o-transcribe`** を既定とする（暫定・確定の transcript イベントは Realtime transcription と同様に受け取れる）。([OpenAI Developers][2])
 
 OpenAI APIキーはブラウザに出さず、Next.jsのサーバー側Route Handlerで一時的なクライアントシークレットを発行する構成にします。Next.jsの環境変数はデフォルトではサーバー側のみで利用され、ブラウザに公開するには `NEXT_PUBLIC_` 接頭辞が必要です。Vercelの環境変数はトークンなどの機密値管理に使えます。([Next.js][3])
 
@@ -163,10 +163,15 @@ Vercel上のNext.jsアプリとして動作させます。
 | 音声取得     | `navigator.mediaDevices.getDisplayMedia()` |
 | リアルタイム通信 | WebRTC                                     |
 | 音声認識     | OpenAI Realtime API                        |
-| モデル      | `gpt-realtime-whisper`                     |
+| モデル      | `gpt-4o-transcribe`（精度優先。環境変数で `gpt-realtime-whisper` 等へ切替可） |
 | 認証       | 簡易パスコード + HttpOnly Cookie                  |
 | キャッシュ    | localStorage                               |
 | DB       | なし                                         |
+
+### モデル選定（MVP）
+
+* **既定**: `gpt-4o-transcribe` — Realtime の transcription セッションで利用でき、**語誤りが少ない用途に向く**（公式ドキュメントでもファイル向き・高精度用途として位置づけられる一方、ライブ用途にも `client_secrets` 経由で接続できる）。
+* **任意**: `gpt-realtime-whisper` — 低遅延の部分テキスト寄り。**モデル・セッション種別の組み合わせやアカウント設定**によっては OpenAI 側でエラーになる場合があるため、環境変数 `OPENAI_REALTIME_TRANSCRIPTION_MODEL` でのみ切り替え、本番既定は `gpt-4o-transcribe` とする。
 
 ---
 
@@ -362,17 +367,16 @@ OpenAI Realtime API用の一時セッションを発行します。
 
 ```json
 {
-  "client_secret": {
-    "value": "ephemeral_token"
-  }
+  "client_secret": "ephemeral_token_string",
+  "expires_at": 1778331642
 }
 ```
 
 ### 責務
 
-* 認証済みCookieの確認
-* OpenAI APIキーを使って一時セッションを作成
-* ブラウザへ一時クライアントシークレットのみ返す
+* 認証済み Cookie の確認
+* サーバーから `POST /v1/realtime/client_secrets` を呼び出し（`session.type: transcription`、body は `lib/openai-realtime-session.ts` で組み立て）、**短命トークン**（OpenAI 応答の `value`）を **`client_secret` キー**でブラウザへ返す（`expires_at` も返す）
+* 標準 API キーはレスポンスに含めない
 
 ---
 
@@ -403,7 +407,8 @@ components/
 lib/
   auth.ts
   cache.ts
-  realtime.ts
+  openai-realtime-session.ts
+  realtime-client.ts
   display-media.ts
   constants.ts
   types.ts
@@ -422,7 +427,8 @@ lib/
 | `ActionButtons.tsx`      | 開始・停止・コピー・クリア            |
 | `lib/auth.ts`            | Cookie署名・検証              |
 | `lib/cache.ts`           | localStorage保存・復元・期限切れ削除 |
-| `lib/realtime.ts`        | OpenAI Realtime WebRTC接続 |
+| `lib/realtime-client.ts` | OpenAI Realtime WebRTC 接続（ephemeral → `/v1/realtime/calls`） |
+| `lib/openai-realtime-session.ts` | `POST /v1/realtime/client_secrets` 用 JSON body の組み立て |
 | `lib/display-media.ts`   | `getDisplayMedia()` 呼び出し |
 | `lib/constants.ts`       | TTL、モデル名、状態定義            |
 | `lib/types.ts`           | 型定義                      |
@@ -507,7 +513,7 @@ AUTH_SECRET=ランダムな長い文字列
 
 * localStorage処理は `lib/cache.ts` に集約
 * 認証Cookie処理は `lib/auth.ts` に集約
-* Realtime接続処理は `lib/realtime.ts` に集約
+* Realtime 接続処理は `lib/realtime-client.ts`、セッション body は `lib/openai-realtime-session.ts` に集約
 
 ---
 
@@ -551,7 +557,7 @@ Next.js + Vercel + OpenAI Realtime + localStorage
 | -------- | ------------------------ |
 | 画面表示     | React components         |
 | 音声取得     | `display-media.ts`       |
-| OpenAI接続 | `realtime.ts`            |
+| OpenAI接続 | `realtime-client.ts` ほか |
 | キャッシュ    | `cache.ts`               |
 | 認証       | `auth.ts` / API routes   |
 | 状態管理     | `TranscriptionPanel.tsx` |
@@ -593,7 +599,7 @@ MVP完了条件は以下です。
 11. エラーハンドリング
 12. Vercel環境変数設定
 13. Vercelデプロイ
-14. Chromeタブ音声で動作確認
+14. Chromeタブ音声で最終確認
 ```
 
 ---
@@ -608,8 +614,8 @@ TypeScript
 Tailwind CSS
 Vercel
 getDisplayMedia()
-OpenAI Realtime API
-gpt-realtime-whisper
+OpenAI Realtime API（client_secrets + WebRTC calls）
+gpt-4o-transcribe
 WebRTC
 簡易パスコード認証
 localStorage 24時間キャッシュ
@@ -620,5 +626,5 @@ DBなし
 これで、要件を満たしつつ、実装量・運用コスト・セキュリティリスクを最小化できます。
 
 [1]: https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getDisplayMedia?utm_source=chatgpt.com "MediaDevices: getDisplayMedia() method - Web APIs | MDN"
-[2]: https://developers.openai.com/api/docs/guides/realtime?utm_source=chatgpt.com "Realtime and audio | OpenAI API"
+[2]: https://developers.openai.com/api/docs/guides/realtime-transcription?utm_source=chatgpt.com "Realtime transcription | OpenAI API"
 [3]: https://nextjs.org/docs/app/guides/environment-variables?utm_source=chatgpt.com "Guides: Environment Variables"

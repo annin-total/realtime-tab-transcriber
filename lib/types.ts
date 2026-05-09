@@ -14,6 +14,23 @@ export type TranscriptCache = {
   savedAt: number;
 };
 
+/** 文字起こし入力経路（タブ共有 vs マイク） */
+export type TranscriptSource = "tab" | "mic";
+
+/** 時系列表示用の確定 1 行 */
+export type TranscriptLine = {
+  id: string;
+  source: TranscriptSource;
+  text: string;
+  createdAt: number;
+};
+
+/** 確定行配列の localStorage キャッシュ形 */
+export type TranscriptLinesCache = {
+  lines: TranscriptLine[];
+  savedAt: number;
+};
+
 /** Realtime から受け取る文字起こしイベントの判別可能な形 */
 export type TranscriptEvent =
   | { type: "delta"; text: string }

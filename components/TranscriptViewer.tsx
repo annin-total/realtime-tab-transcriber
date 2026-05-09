@@ -41,7 +41,7 @@ export function TranscriptViewer({
         >
           {LABEL_FINAL}
         </h2>
-        <div className="min-h-24 max-h-64 overflow-y-auto rounded-lg border border-zinc-200 bg-white p-3 text-sm leading-relaxed text-zinc-900 whitespace-pre-wrap dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100">
+        <div className="h-[300vh] overflow-y-auto rounded-lg border border-zinc-200 bg-white p-3 text-sm leading-relaxed text-zinc-900 whitespace-pre-wrap dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100">
           {finalText || (
             <span className="text-zinc-400 dark:text-zinc-500">（なし）</span>
           )}

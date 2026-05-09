@@ -14,7 +14,16 @@ export const LABEL_STATUS_HEADING = "状態:";
 export const LABEL_TENTATIVE = "暫定テキスト:";
 
 /** 確定テキスト欄の見出し */
-export const LABEL_FINAL = "確定テキスト:";
+export const LABEL_FINAL = "確定（時系列）:";
+
+/** マイク併用のチェックボックス */
+export const LABEL_MIC_INCLUDE = "自分のマイク音声も含める";
+
+/** 時系列行のソース表示（タブ経路） */
+export const LABEL_SOURCE_TAB = "タブ";
+
+/** 時系列行のソース表示（マイク経路） */
+export const LABEL_SOURCE_SELF = "自分";
 
 /** 操作ボタン文言 */
 export const BTN_START = "開始";

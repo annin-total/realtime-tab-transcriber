@@ -1,11 +1,14 @@
-/** localStorage に保存する文字起こしキャッシュのキー */
+/** localStorage に保存する文字起こしキャッシュのキー（旧・移行元） */
 export const TRANSCRIPT_CACHE_KEY = "transcript-cache-v1";
+
+/** 確定行＋ソース付きキャッシュのキー */
+export const TRANSCRIPT_LINES_CACHE_KEY = "transcript-lines-cache-v1";
 
 /** キャッシュの有効期限（24時間） */
 export const TRANSCRIPT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
-/** OpenAI Realtime 文字起こし用モデル識別子 */
-export const REALTIME_MODEL = "gpt-realtime-whisper";
+/** Realtime transcription 既定モデル（`OPENAI_REALTIME_TRANSCRIPTION_MODEL` で上書き可） */
+export const REALTIME_MODEL = "gpt-4o-transcribe";
 
 /** 既定の文字起こし言語（BCP 47） */
 export const TRANSCRIPTION_LANGUAGE = "ja";
@@ -25,9 +28,21 @@ export const API_PATH_AUTH_ME = "/api/auth/me";
 /** ログアウト POST（相対パス） */
 export const API_PATH_LOGOUT = "/api/logout";
 
-/** Realtime WebRTC 用 SDP 中継 POST（相対パス・認証必須） */
-export const API_PATH_REALTIME_SDP = "/api/realtime/sdp";
+/**
+ * 文字起こし用 GA client secret 発行 POST（相対パス・認証必須）
+ * サーバーが OpenAI `client_secrets` を呼び出し、短命トークンを返す
+ */
+export const API_PATH_REALTIME_SESSION = "/api/realtime/session";
 
-/** OpenAI Realtime unified interface（サーバーからのみ呼び出す） */
+/**
+ * GA Realtime 用 client secret 発行（サーバーからのみ呼び出す）
+ * @see https://developers.openai.com/api/reference/resources/realtime/subresources/client_secrets/methods/create
+ */
+export const OPENAI_REALTIME_CLIENT_SECRETS_URL =
+  "https://api.openai.com/v1/realtime/client_secrets";
+
+/**
+ * ブラウザが ephemeral token を使って SDP を直接送るエンドポイント
+ */
 export const OPENAI_REALTIME_CALLS_URL =
   "https://api.openai.com/v1/realtime/calls";
