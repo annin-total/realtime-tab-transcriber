@@ -26,3 +26,13 @@ export const ERR_COPY_FAILED =
 
 /** ユーザーがブラウザ側で共有を終了したとき（通知） */
 export const NOTICE_SHARE_ENDED = "共有が終了しました。";
+
+/** `getUserMedia` 非対応（マイク） */
+export const ERR_MIC_UNSUPPORTED =
+  "このブラウザではマイクを利用できません。";
+
+/**
+ * マイク許可が得られなかったがタブ文字起こしは継続するとき（通知）
+ */
+export const NOTICE_MIC_DENIED_TAB_CONTINUES =
+  "マイクの使用が許可されませんでした。タブ音声の文字起こしは続行します。";

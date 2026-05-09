@@ -1,5 +1,6 @@
 import {
   ERR_AUDIO_SHARE_OFF,
+  ERR_MIC_UNSUPPORTED,
   ERR_OPENAI_CONNECTION,
   ERR_SERVER_CONFIG,
   ERR_UNSUPPORTED_BROWSER,
@@ -13,6 +14,7 @@ export function mapTranscriptionFlowError(input: unknown): string {
 
   if (msg === ERR_UNSUPPORTED_BROWSER) return msg;
   if (msg === ERR_AUDIO_SHARE_OFF) return msg;
+  if (msg === ERR_MIC_UNSUPPORTED) return msg;
 
   if (/OPENAI_API_KEY|OPENAI_API_KEY is not set|is not set/i.test(msg)) {
     return ERR_SERVER_CONFIG;

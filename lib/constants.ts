@@ -1,5 +1,8 @@
-/** localStorage に保存する文字起こしキャッシュのキー */
+/** localStorage に保存する文字起こしキャッシュのキー（旧・移行元） */
 export const TRANSCRIPT_CACHE_KEY = "transcript-cache-v1";
+
+/** 確定行＋ソース付きキャッシュのキー */
+export const TRANSCRIPT_LINES_CACHE_KEY = "transcript-lines-cache-v1";
 
 /** キャッシュの有効期限（24時間） */
 export const TRANSCRIPT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
