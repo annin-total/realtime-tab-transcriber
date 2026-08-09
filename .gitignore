@@ -47,5 +47,4 @@ next-env.d.ts
 # eslint
 .eslintcache
 .claude/settings.local.json
-.ai-config-profile
 pr-body.md

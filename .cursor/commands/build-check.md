@@ -1,1 +1,0 @@
-/Users/terasawayuki/Documents/program/Development/realtime-tab-transcriber/.ai-configs/shared/workflows/build-check.md
