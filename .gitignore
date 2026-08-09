@@ -36,6 +36,14 @@ yarn-error.log*
 # env files（.env.example はテンプレートとしてリポジトリ管理する）
 .env*
 !.env.example
+*.local
+*.local.*
+local/
+*/local/
+secrets/
+*/secrets/
+credentials/
+*/credentials/
 
 # vercel
 .vercel
