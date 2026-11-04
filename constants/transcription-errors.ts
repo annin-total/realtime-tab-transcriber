@@ -36,3 +36,8 @@ export const ERR_MIC_UNSUPPORTED =
  */
 export const NOTICE_MIC_DENIED_TAB_CONTINUES =
   "マイクの使用が許可されませんでした。タブ音声の文字起こしは続行します。";
+
+/** 履歴（IndexedDB）の保存・読み込み・削除に失敗したとき */
+export const ERR_HISTORY_SAVE = "履歴の保存に失敗しました。";
+export const ERR_HISTORY_LOAD = "履歴の読み込みに失敗しました。";
+export const ERR_HISTORY_DELETE = "履歴の削除に失敗しました。";

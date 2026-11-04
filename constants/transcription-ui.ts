@@ -31,6 +31,17 @@ export const BTN_STOP = "停止";
 export const BTN_COPY = "コピー";
 export const BTN_CLEAR = "クリア";
 
+/** 履歴サイドメニューの文言 */
+export const BTN_HISTORY = "履歴";
+export const BTN_HISTORY_CLOSE = "閉じる";
+export const BTN_HISTORY_BACK = "一覧に戻る";
+export const BTN_HISTORY_DELETE = "削除";
+export const LABEL_HISTORY_HEADING = "履歴（7日間保存）";
+export const LABEL_HISTORY_EMPTY = "履歴はありません。";
+export const LABEL_HISTORY_LOADING = "読み込み中…";
+export const NOTICE_HISTORY_COPIED = "コピーしました。";
+export const CONFIRM_HISTORY_DELETE = "この履歴を削除しますか？";
+
 /** `AppStatus` を画面表示用の短い日本語へ */
 export const APP_STATUS_LABEL: Record<AppStatus, string> = {
   auth_required: "認証が必要です",
