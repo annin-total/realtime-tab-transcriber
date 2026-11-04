@@ -63,7 +63,7 @@ MVPでは **自分または限られた利用者** を想定します。
 | 音声対象 | Chromeタブ音声                               |
 | 言語   | 日本語固定                                    |
 | 認証   | 簡易パスコード                                  |
-| 保存   | 音声保存なし、文字起こしテキストのみlocalStorageに24時間キャッシュ |
+| 保存   | 音声保存なし。表示中の文字起こしはlocalStorageに24時間キャッシュ、履歴はIndexedDBに7日間保存 |
 
 ---
 
@@ -83,8 +83,9 @@ MVPでは **自分または限られた利用者** を想定します。
 | F-08 | 停止                | 停止ボタンで共有・WebRTC・音声トラックを停止する           |
 | F-09 | 24時間キャッシュ         | 文字起こし結果をlocalStorageに保存し、24時間後に破棄する   |
 | F-10 | コピー               | 文字起こし全文をクリップボードにコピーする                 |
-| F-11 | クリア               | 画面上の文字起こし結果とキャッシュを削除する                |
+| F-11 | クリア               | 画面上の文字起こし結果とキャッシュを削除する（履歴は残す）       |
 | F-12 | エラー表示             | 音声未共有、接続失敗、認証失敗などをユーザーに表示する           |
+| F-13 | 履歴                | 開始〜停止の1回分を1件としてIndexedDBに7日間保存し、サイドメニューで一覧・閲覧・コピー・削除する |
 
 ---
 
@@ -100,7 +101,6 @@ YAGNIの観点で、以下は実装しません。
 | ユーザー管理           | MVP範囲外                 |
 | Safari/Firefox対応 | 仕様差分が増えるため対象外          |
 | macOS全体音声取得      | Webアプリ単体では制約が強く、今回の対象外 |
-| 文字起こし履歴一覧        | DBが必要になるため対象外          |
 | 要約機能             | 初期MVPでは文字起こしに集中        |
 | 話者分離             | 精度・実装負荷が上がるため対象外       |
 | 翻訳               | 日本語固定のため不要             |
@@ -117,7 +117,7 @@ YAGNIの観点で、以下は実装しません。
 | 簡易パスコード      | Vercel環境変数 `APP_PASSCODE` に保存             |
 | 認証状態         | HttpOnly Cookieで保持                        |
 | 音声データ        | 保存しない                                     |
-| 文字起こしデータ     | ユーザーのブラウザlocalStorageにのみ保存                |
+| 文字起こしデータ     | ユーザーのブラウザ（localStorage・IndexedDB）にのみ保存   |
 | 外部送信         | 音声ストリームはOpenAI Realtime APIへ送信            |
 | HTTPS        | VercelデプロイによりHTTPS利用                      |
 
@@ -403,6 +403,8 @@ components/
   StatusBadge.tsx
   TranscriptViewer.tsx
   ActionButtons.tsx
+  HistoryDrawer.tsx
+  HistoryDetail.tsx
 
 lib/
   auth.ts
@@ -410,6 +412,10 @@ lib/
   openai-realtime-session.ts
   realtime-client.ts
   realtime-rotating.ts
+  history-db.ts
+  history-format.ts
+  transcript-text.ts
+  use-history-recorder.ts
   display-media.ts
   constants.ts
   types.ts
@@ -428,6 +434,9 @@ lib/
 | `ActionButtons.tsx`      | 開始・停止・コピー・クリア            |
 | `lib/auth.ts`            | Cookie署名・検証              |
 | `lib/cache.ts`           | localStorage保存・復元・期限切れ削除 |
+| `lib/history-db.ts`      | IndexedDB の履歴保存・一覧・削除、7日超過分の削除 |
+| `lib/use-history-recorder.ts` | 開始〜停止の1回分の確定行を履歴へ逐次保存 |
+| `HistoryDrawer.tsx` / `HistoryDetail.tsx` | 履歴サイドメニュー（一覧・詳細） |
 | `lib/realtime-client.ts` | OpenAI Realtime WebRTC 接続（ephemeral → `/v1/realtime/calls`） |
 | `lib/realtime-rotating.ts` | セッション上限（60分）前に同じ `MediaStream` で新接続を張り、開通後に旧接続を閉じる |
 | `lib/openai-realtime-session.ts` | `POST /v1/realtime/client_secrets` 用 JSON body の組み立て |
@@ -528,7 +537,6 @@ MVPに不要なものは入れません。
 * DB
 * 本格ログイン
 * 音声保存
-* 履歴一覧
 * ユーザー管理
 * 要約
 * 翻訳

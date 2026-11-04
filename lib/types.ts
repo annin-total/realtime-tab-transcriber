@@ -31,6 +31,15 @@ export type TranscriptLinesCache = {
   savedAt: number;
 };
 
+/** IndexedDB に保存する文字起こし履歴 1 件（開始〜停止の 1 回分） */
+export type HistoryEntry = {
+  id: string;
+  startedAt: number;
+  /** 最後に確定行を保存した時刻。保持期限の判定に使う */
+  updatedAt: number;
+  lines: TranscriptLine[];
+};
+
 /** Realtime から受け取る文字起こしイベントの判別可能な形 */
 export type TranscriptEvent =
   | { type: "delta"; text: string }

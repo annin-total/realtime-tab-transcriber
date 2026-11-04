@@ -14,8 +14,6 @@ import {
   NOTICE_SHARE_ENDED,
 } from "@/constants/transcription-errors";
 import {
-  LABEL_SOURCE_SELF,
-  LABEL_SOURCE_TAB,
   TRANSCRIPTION_INSTRUCTION,
   TRANSCRIPTION_PAGE_TITLE,
 } from "@/constants/transcription-ui";
@@ -33,36 +31,14 @@ import { connectRotatingRealtime } from "@/lib/realtime-rotating";
 import type { RealtimeSession } from "@/lib/realtime-rotating";
 import { mapTranscriptionFlowError } from "@/lib/map-transcription-error";
 import { parseTranscriptEvent } from "@/lib/transcript-events";
+import { buildClipboardText } from "@/lib/transcript-text";
+import { useHistoryRecorder } from "@/lib/use-history-recorder";
 import type { AppStatus, TranscriptLine, TranscriptSource } from "@/lib/types";
 import { ActionButtons } from "./ActionButtons";
+import { HistoryDrawer } from "./HistoryDrawer";
 import { MicToggle } from "./MicToggle";
 import { StatusBadge } from "./StatusBadge";
 import { TranscriptTimeline } from "./TranscriptTimeline";
-
-/** 暫定・確定をクリップボード用テキストに整形する */
-function buildClipboardText(
-  lines: TranscriptLine[],
-  partialTab: string,
-  partialMic: string,
-): string {
-  const parts: string[] = [];
-  if (partialTab.trim()) {
-    parts.push(`【暫定・${LABEL_SOURCE_TAB}】\n${partialTab}`);
-  }
-  if (partialMic.trim()) {
-    parts.push(`【暫定・${LABEL_SOURCE_SELF}】\n${partialMic}`);
-  }
-  const confirmed = lines
-    .map((line) => {
-      const tag = line.source === "tab" ? LABEL_SOURCE_TAB : LABEL_SOURCE_SELF;
-      return `【${tag}】\n${line.text}`;
-    })
-    .join("\n\n");
-  if (confirmed.trim()) {
-    parts.push(`【確定】\n${confirmed}`);
-  }
-  return parts.join("\n\n");
-}
 
 /** 文字起こし画面の状態と子コンポーネントを束ねる親 */
 export function TranscriptionPanel() {
@@ -83,6 +59,10 @@ export function TranscriptionPanel() {
   const [cacheHydrated, setCacheHydrated] = useState(false);
   const [hasDisplayStream, setHasDisplayStream] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
+  const { beginSession, getSessionStartedAt } = useHistoryRecorder(
+    lines,
+    setNotice,
+  );
 
   useEffect(() => {
     startTransition(() => {
@@ -159,10 +139,16 @@ export function TranscriptionPanel() {
         return;
       }
 
-      /* 直前の確定行と同一ソースならラベル繰り返しを避け、本文を連続表示する */
+      /* 直前の確定行と同一ソースならラベル繰り返しを避け、本文を連続表示する。
+         履歴を開始〜停止の 1 回分で区切るため、前回セッションの行には連結しない */
       setLines((prev) => {
         const last = prev[prev.length - 1];
-        if (last?.source === source) {
+        const sessionStartedAt = getSessionStartedAt();
+        if (
+          last?.source === source &&
+          sessionStartedAt !== null &&
+          last.createdAt >= sessionStartedAt
+        ) {
           return [
             ...prev.slice(0, -1),
             {
@@ -187,7 +173,7 @@ export function TranscriptionPanel() {
         setPartialMic("");
       }
     },
-    [],
+    [getSessionStartedAt],
   );
 
   const hasTranscript = Boolean(
@@ -210,6 +196,7 @@ export function TranscriptionPanel() {
     setErrorDetail(null);
     setStartBusy(true);
     setStatus("requesting_display");
+    beginSession();
 
     try {
       const stream = await requestTabAudioStream();
@@ -277,6 +264,7 @@ export function TranscriptionPanel() {
     }
   }, [
     appendRealtimeEvent,
+    beginSession,
     hasDisplayStream,
     micEnabled,
     releaseAllCapture,
@@ -332,9 +320,12 @@ export function TranscriptionPanel() {
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
-          {TRANSCRIPTION_PAGE_TITLE}
-        </h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50">
+            {TRANSCRIPTION_PAGE_TITLE}
+          </h1>
+          <HistoryDrawer />
+        </div>
         <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
           {TRANSCRIPTION_INSTRUCTION}
         </p>

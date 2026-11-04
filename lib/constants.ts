@@ -7,6 +7,14 @@ export const TRANSCRIPT_LINES_CACHE_KEY = "transcript-lines-cache-v1";
 /** キャッシュの有効期限（24時間） */
 export const TRANSCRIPT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** 文字起こし履歴を保存する IndexedDB の DB 名・バージョン・ストア名 */
+export const HISTORY_DB_NAME = "transcript-history";
+export const HISTORY_DB_VERSION = 1;
+export const HISTORY_STORE = "entries";
+
+/** 履歴の保持期間（7日間） */
+export const HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Realtime transcription 既定モデル（`OPENAI_REALTIME_TRANSCRIPTION_MODEL` で上書き可） */
 export const REALTIME_MODEL = "gpt-4o-transcribe";
 
