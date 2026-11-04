@@ -409,6 +409,7 @@ lib/
   cache.ts
   openai-realtime-session.ts
   realtime-client.ts
+  realtime-rotating.ts
   display-media.ts
   constants.ts
   types.ts
@@ -428,6 +429,7 @@ lib/
 | `lib/auth.ts`            | Cookie署名・検証              |
 | `lib/cache.ts`           | localStorage保存・復元・期限切れ削除 |
 | `lib/realtime-client.ts` | OpenAI Realtime WebRTC 接続（ephemeral → `/v1/realtime/calls`） |
+| `lib/realtime-rotating.ts` | セッション上限（60分）前に同じ `MediaStream` で新接続を張り、開通後に旧接続を閉じる |
 | `lib/openai-realtime-session.ts` | `POST /v1/realtime/client_secrets` 用 JSON body の組み立て |
 | `lib/display-media.ts`   | `getDisplayMedia()` 呼び出し |
 | `lib/constants.ts`       | TTL、モデル名、状態定義            |

@@ -76,6 +76,7 @@ Chrome タブの音声（および任意でマイク）を **OpenAI Realtime API
 | [`app/api/auth/`](app/api/auth/) | パスコード検証・セッション |
 | [`components/TranscriptionPanel.tsx`](components/TranscriptionPanel.tsx) | 共有・Realtime・状態のオーケストレーション |
 | [`lib/realtime-client.ts`](lib/realtime-client.ts) | WebRTC 接続（SDP・DataChannel） |
+| [`lib/realtime-rotating.ts`](lib/realtime-rotating.ts) | セッション上限（60分）前の接続張り替え |
 | [`lib/openai-realtime-session.ts`](lib/openai-realtime-session.ts) | セッション JSON ボディ組み立て |
 | [`constants/`](constants/) | UI 文言・ユーザー向けエラー文言 |
 
@@ -83,6 +84,7 @@ Chrome タブの音声（および任意でマイク）を **OpenAI Realtime API
 
 - **音声ファイルの永続保存は行いません**（ストリームを送るのみ）。
 - マイクを ON にした場合、**タブ音声とマイクは別々の Realtime セッション**になり、概ね課金・負荷は二系統に近くなります。
+- OpenAI Realtime のセッションは最大60分のため、**約55分ごとに同じ共有音声のまま接続を張り替えて**継続します。切替の瞬間に数秒分の取りこぼし・重複が起きることがあります。
 - スピーカー出力がマイクに入ると、タブ側と自分側に**同じ内容が二重に出る**ことがあります。ヘッドホン利用を推奨します。
 
 ## ライセンス
