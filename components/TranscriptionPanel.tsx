@@ -29,8 +29,8 @@ import {
   stopMediaStream,
 } from "@/lib/display-media";
 import { requestMicStream, stopMicStream } from "@/lib/microphone";
-import { connectRealtime } from "@/lib/realtime-client";
-import type { RealtimeConnection } from "@/lib/realtime-client";
+import { connectRotatingRealtime } from "@/lib/realtime-rotating";
+import type { RealtimeSession } from "@/lib/realtime-rotating";
 import { mapTranscriptionFlowError } from "@/lib/map-transcription-error";
 import { parseTranscriptEvent } from "@/lib/transcript-events";
 import type { AppStatus, TranscriptLine, TranscriptSource } from "@/lib/types";
@@ -68,8 +68,8 @@ function buildClipboardText(
 export function TranscriptionPanel() {
   const streamRef = useRef<MediaStream | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
-  const realtimeTabRef = useRef<RealtimeConnection | null>(null);
-  const realtimeMicRef = useRef<RealtimeConnection | null>(null);
+  const realtimeTabRef = useRef<RealtimeSession | null>(null);
+  const realtimeMicRef = useRef<RealtimeSession | null>(null);
   /** 停止ボタン由来の解放か（トラック `ended` と二重通知を防ぐ） */
   const userInitiatedStopRef = useRef(false);
 
@@ -217,7 +217,7 @@ export function TranscriptionPanel() {
       setHasDisplayStream(true);
       setStatus("connecting");
 
-      await connectRealtime(
+      await connectRotatingRealtime(
         stream,
         {
           onEvent: (raw) => appendRealtimeEvent("tab", raw),
@@ -237,7 +237,7 @@ export function TranscriptionPanel() {
         try {
           const micStream = await requestMicStream();
           micStreamRef.current = micStream;
-          await connectRealtime(
+          await connectRotatingRealtime(
             micStream,
             {
               onEvent: (raw) => appendRealtimeEvent("mic", raw),

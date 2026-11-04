@@ -119,6 +119,9 @@ export async function connectRealtime(
       peer,
       dataChannel,
       close: () => {
+        /* 意図した切断で onError が発火し、張り替え後の利用側を止めないようにする */
+        dataChannel.onerror = null;
+        dataChannel.onmessage = null;
         try {
           dataChannel.close();
         } catch {

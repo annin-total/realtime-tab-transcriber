@@ -10,6 +10,15 @@ export const TRANSCRIPT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 /** Realtime transcription 既定モデル（`OPENAI_REALTIME_TRANSCRIPTION_MODEL` で上書き可） */
 export const REALTIME_MODEL = "gpt-4o-transcribe";
 
+/** Realtime 接続を張り替える間隔。OpenAI のセッション上限（60分）より前に設定する */
+export const REALTIME_SESSION_ROTATE_MS = 55 * 60 * 1000;
+
+/** 張り替え失敗時の再試行間隔 */
+export const REALTIME_ROTATE_RETRY_MS = 30 * 1000;
+
+/** 張り替え用の新接続で DataChannel の開通を待つ上限 */
+export const REALTIME_OPEN_TIMEOUT_MS = 15 * 1000;
+
 /** 既定の文字起こし言語（BCP 47） */
 export const TRANSCRIPTION_LANGUAGE = "ja";
 
